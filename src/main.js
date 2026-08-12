@@ -21,6 +21,43 @@ async function bootstrap() {
   const app = document.getElementById('app');
   if (!app) return;
 
+  // Handle OAuth Callback landing in browser
+  const params = new URLSearchParams(window.location.search);
+  const oauthCode = params.get('code');
+  if (oauthCode && (window.location.pathname.includes('/oauth/callback') || window.location.search.includes('code='))) {
+    try {
+      const channel = new BroadcastChannel('introvert_oauth');
+      channel.postMessage({ type: 'oauth_code', code: oauthCode });
+    } catch (e) {}
+    try {
+      localStorage.setItem('introvert_oauth_received_code', oauthCode);
+    } catch (e) {}
+
+    app.innerHTML = `
+      <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100vh; width:100vw; background:var(--bg-canvas); color:var(--text-main); font-family:var(--font-sans); text-align:center; padding:24px;">
+        <div class="nav-logo" style="width:54px; height:54px; font-size:24px; margin-bottom:16px; box-shadow:0 8px 24px var(--accent-glow);">I</div>
+        <h2 style="font-size:22px; font-weight:700; margin-bottom:8px;">Authorization Successful</h2>
+        <p style="font-size:14px; color:var(--text-muted); max-width:400px; margin-bottom:24px; line-height:1.5;">
+          Your Extrovert account has been authorized. You can return to the Introvert application.
+        </p>
+        <div style="background:var(--bg-surface); border:1px solid var(--border-subtle); border-radius:var(--radius-md); padding:16px 20px; max-width:420px; width:100%; display:flex; flex-direction:column; gap:12px; box-shadow:var(--shadow-md);">
+          <span style="font-size:12px; color:var(--text-faint); text-transform:uppercase; font-weight:600;">Authorization Code</span>
+          <div style="font-family:var(--font-mono); font-size:13px; word-break:break-all; background:var(--bg-canvas); border:1px solid var(--border-subtle); padding:10px 12px; border-radius:var(--radius-sm); user-select:all;">${escapeHtml(oauthCode)}</div>
+          <button class="btn-pill primary" id="copy-oauth-code-btn" style="height:38px; justify-content:center; font-weight:600;">
+            Copy Authorization Code
+          </button>
+        </div>
+      </div>
+    `;
+
+    document.getElementById('copy-oauth-code-btn')?.addEventListener('click', () => {
+      navigator.clipboard.writeText(oauthCode);
+      const btn = document.getElementById('copy-oauth-code-btn');
+      if (btn) btn.textContent = 'Copied to Clipboard!';
+    });
+    return;
+  }
+
   app.innerHTML = '<div style="display:flex; height:100vh; width:100vw; align-items:center; justify-content:center; color:var(--text-faint);">Loading Introvert...</div>';
 
   await initAppStores();

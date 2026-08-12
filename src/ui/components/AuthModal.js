@@ -1,7 +1,7 @@
 // Introvert Authentication & E2EE Unlock Modal Component (OAuth 2.0 PKCE)
 
 import { authStore, bootstrapAuthenticatedData, showToast } from '../../core/state.js';
-import { config, OFFICIAL_CLIENT_ID } from '../../core/config.js';
+import { config, OFFICIAL_SERVER_URL } from '../../core/config.js';
 import { api } from '../../core/api.js';
 import { cryptoEngine } from '../../core/crypto.js';
 import { signaling } from '../../core/signaling.js';
@@ -12,14 +12,34 @@ export function createAuthModal({ onSuccess }) {
   overlay.id = 'auth-modal-root';
 
   let mode = 'oauth'; // 'oauth' | 'oauth-code' | 'token' | 'unlock'
-  let serverUrl = config.serverUrl || 'https://extrovert.redforged.eu';
-  let customClientId = OFFICIAL_CLIENT_ID;
+  let serverUrl = config.serverUrl || OFFICIAL_SERVER_URL;
   let authCodeInput = '';
   let directTokenInput = '';
   let password = '';
   let authorizeUrl = '';
   let isLoading = false;
   let errorMessage = '';
+
+  let broadcastChannel = null;
+
+  try {
+    broadcastChannel = new BroadcastChannel('introvert_oauth');
+    broadcastChannel.onmessage = (event) => {
+      if (event.data && event.data.code && mode === 'oauth-code') {
+        authCodeInput = event.data.code;
+        completeOAuthFlow(authCodeInput);
+      }
+    };
+  } catch (e) {}
+
+  const onStorageChange = (e) => {
+    if (e.key === 'introvert_oauth_received_code' && e.newValue && mode === 'oauth-code') {
+      authCodeInput = e.newValue;
+      localStorage.removeItem('introvert_oauth_received_code');
+      completeOAuthFlow(authCodeInput);
+    }
+  };
+  window.addEventListener('storage', onStorageChange);
 
   const openExternalUrl = async (url) => {
     try {
@@ -46,7 +66,7 @@ export function createAuthModal({ onSuccess }) {
     render();
 
     try {
-      const { authorizeUrl: authUrl } = await api.initOAuth(serverUrl, { clientId: customClientId.trim() });
+      const { authorizeUrl: authUrl } = await api.initOAuth(serverUrl);
       authorizeUrl = authUrl;
       mode = 'oauth-code';
       isLoading = false;
@@ -60,8 +80,9 @@ export function createAuthModal({ onSuccess }) {
     }
   };
 
-  const completeOAuthFlow = async () => {
-    if (!authCodeInput.trim()) {
+  const completeOAuthFlow = async (codeToUse = null) => {
+    const code = (codeToUse || authCodeInput).trim();
+    if (!code) {
       errorMessage = 'Please paste the authorization code or redirect URL.';
       render();
       return;
@@ -72,11 +93,11 @@ export function createAuthModal({ onSuccess }) {
     render();
 
     try {
-      const { user } = await api.completeOAuth(authCodeInput);
+      const { user } = await api.completeOAuth(code);
       mode = 'unlock';
       isLoading = false;
       errorMessage = '';
-      showToast('success', `Signed in as @${user.username}!`);
+      showToast('success', `Authorized as @${user.username}!`);
       render();
     } catch (err) {
       errorMessage = err.message || 'OAuth token exchange failed.';
@@ -131,6 +152,7 @@ export function createAuthModal({ onSuccess }) {
       await bootstrapAuthenticatedData();
 
       showToast('success', 'Encryption unlocked & connected!');
+      cleanup();
       overlay.remove();
       if (onSuccess) onSuccess(activeUser);
     } catch (err) {
@@ -142,9 +164,17 @@ export function createAuthModal({ onSuccess }) {
     }
   };
 
+  const cleanup = () => {
+    window.removeEventListener('storage', onStorageChange);
+    if (broadcastChannel) {
+      broadcastChannel.close();
+      broadcastChannel = null;
+    }
+  };
+
   const render = () => {
     overlay.innerHTML = `
-      <div class="modal-card" style="max-width:440px;">
+      <div class="modal-card" style="max-width:420px;">
         <div class="modal-header">
           <div style="display:flex; align-items:center; gap:8px;">
             <div class="nav-logo" style="width:28px; height:28px; font-size:13px; margin:0;">I</div>
@@ -175,17 +205,12 @@ export function createAuthModal({ onSuccess }) {
             mode === 'oauth'
               ? `
             <p style="font-size:13px; color:var(--text-muted); line-height:1.45;">
-              Introvert connects securely to your Extrovert instance using OAuth 2.0 with PKCE without storing your plaintext password.
+              Sign in securely via OAuth 2.0 PKCE. Your password remains private on your Extrovert server.
             </p>
 
             <div class="form-group">
-              <label class="form-label">Instance Server URL</label>
+              <label class="form-label">Extrovert Instance</label>
               <input type="text" class="form-input" id="auth-server" value="${escapeHtml(serverUrl)}" placeholder="https://extrovert.redforged.eu" />
-            </div>
-
-            <div class="form-group" style="margin-top:10px;">
-              <label class="form-label">OAuth Client ID</label>
-              <input type="text" class="form-input" id="auth-client-id" value="${escapeHtml(customClientId)}" placeholder="OAuth Client ID" style="font-family:var(--font-mono); font-size:12px;" />
             </div>
 
             <div style="margin-top:14px;">
@@ -201,7 +226,7 @@ export function createAuthModal({ onSuccess }) {
                 <strong>Step 1:</strong> An authorization window has been opened in your browser.
               </p>
               <p style="margin-bottom:12px; font-size:12.5px; color:var(--text-muted);">
-                If the window didn't open automatically, <a href="#" id="manual-auth-link" style="color:var(--accent); text-decoration:underline; cursor:pointer;">click here to open the authorization page</a>.
+                If the window didn't open, <a href="#" id="manual-auth-link" style="color:var(--accent); text-decoration:underline; cursor:pointer;">click here to open it</a>.
               </p>
               <p style="margin-bottom:8px;">
                 <strong>Step 2:</strong> Click <strong>Authorize</strong> in your browser, then copy & paste the authorization code below:
@@ -275,7 +300,6 @@ export function createAuthModal({ onSuccess }) {
 
   const attachHandlers = () => {
     overlay.querySelector('#auth-server')?.addEventListener('input', (e) => (serverUrl = e.target.value));
-    overlay.querySelector('#auth-client-id')?.addEventListener('input', (e) => (customClientId = e.target.value));
 
     overlay.querySelector('#start-oauth-btn')?.addEventListener('click', startOAuthFlow);
 
@@ -290,7 +314,6 @@ export function createAuthModal({ onSuccess }) {
       codeInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') completeOAuthFlow();
       });
-      // Auto-submit if user pastes a URL or code
       codeInput.addEventListener('paste', () => {
         setTimeout(() => {
           authCodeInput = codeInput.value;
@@ -299,7 +322,7 @@ export function createAuthModal({ onSuccess }) {
       });
     }
 
-    overlay.querySelector('#complete-oauth-btn')?.addEventListener('click', completeOAuthFlow);
+    overlay.querySelector('#complete-oauth-btn')?.addEventListener('click', () => completeOAuthFlow());
 
     const tokenInput = overlay.querySelector('#direct-token-input');
     if (tokenInput) {
@@ -349,5 +372,6 @@ export function createAuthModal({ onSuccess }) {
       mode = m;
       render();
     },
+    destroy: cleanup,
   };
 }
