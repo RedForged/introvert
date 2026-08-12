@@ -166,17 +166,21 @@ class ApiClient {
     const base = session.serverUrl || config.serverUrl;
     await config.setServerUrl(base);
 
+    const payload = {
+      grant_type: 'authorization_code',
+      client_id: session.clientId,
+      code,
+      code_verifier: session.verifier,
+      redirect_uri: session.redirectUri,
+    };
+    if (session.clientSecret) {
+      payload.client_secret = session.clientSecret;
+    }
+
     const tokenRes = await fetch(`${base}/api/v1/oauth/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        grant_type: 'authorization_code',
-        client_id: session.clientId,
-        client_secret: session.clientSecret,
-        code,
-        code_verifier: session.verifier,
-        redirect_uri: session.redirectUri,
-      }),
+      body: JSON.stringify(payload),
     });
 
     if (!tokenRes.ok) {
@@ -263,6 +267,7 @@ class ApiClient {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           grant_type: 'refresh_token',
+          client_id: OFFICIAL_CLIENT_ID,
           refresh_token: config.refreshToken,
         }),
       });
