@@ -1,4 +1,4 @@
-// Introvert Authentication & E2EE Unlock Modal Component (OAuth 2.0 PKCE)
+// Introvert Authentication Component (OAuth 2.0 PKCE & Seamless Device Key E2EE)
 
 import { authStore, bootstrapAuthenticatedData, showToast } from '../../core/state.js';
 import { config, OFFICIAL_SERVER_URL } from '../../core/config.js';
@@ -11,11 +11,10 @@ export function createAuthModal({ onSuccess }) {
   overlay.className = 'modal-overlay';
   overlay.id = 'auth-modal-root';
 
-  let mode = 'oauth'; // 'oauth' | 'oauth-code' | 'token' | 'unlock'
+  let mode = 'oauth'; // 'oauth' | 'oauth-code' | 'token'
   let serverUrl = config.serverUrl || OFFICIAL_SERVER_URL;
   let authCodeInput = '';
   let directTokenInput = '';
-  let password = '';
   let authorizeUrl = '';
   let isLoading = false;
   let errorMessage = '';
@@ -94,11 +93,19 @@ export function createAuthModal({ onSuccess }) {
 
     try {
       const { user } = await api.completeOAuth(code);
-      mode = 'unlock';
       isLoading = false;
       errorMessage = '';
       showToast('success', `Authorized as @${user.username}!`);
-      render();
+
+      // Automatically initialize Olm Double-Ratchet encryption using native device key Kd
+      await cryptoEngine.ensureReady();
+      authStore.set({ isE2eeReady: true, isAuthenticated: true, user });
+      signaling.connect();
+      await bootstrapAuthenticatedData();
+
+      cleanup();
+      overlay.remove();
+      if (onSuccess) onSuccess(user);
     } catch (err) {
       errorMessage = err.message || 'OAuth token exchange failed.';
       isLoading = false;
@@ -119,46 +126,20 @@ export function createAuthModal({ onSuccess }) {
 
     try {
       const { user } = await api.loginWithToken(directTokenInput.trim(), serverUrl);
-      mode = 'unlock';
       isLoading = false;
       errorMessage = '';
       showToast('success', `Signed in as @${user.username}!`);
-      render();
-    } catch (err) {
-      errorMessage = err.message || 'Token verification failed.';
-      isLoading = false;
-      render();
-    }
-  };
 
-  const handleUnlock = async () => {
-    if (!password) {
-      errorMessage = 'Please enter your password / passphrase to unlock encryption.';
-      render();
-      return;
-    }
-
-    isLoading = true;
-    errorMessage = '';
-    render();
-
-    try {
-      const activeUser = config.currentUser;
-      if (activeUser) {
-        await cryptoEngine.unlockWithPassword(password, activeUser.username);
-      }
-      authStore.set({ isE2eeReady: true, isAuthenticated: true, user: activeUser });
+      await cryptoEngine.ensureReady();
+      authStore.set({ isE2eeReady: true, isAuthenticated: true, user });
       signaling.connect();
       await bootstrapAuthenticatedData();
 
-      showToast('success', 'Encryption unlocked & connected!');
       cleanup();
       overlay.remove();
-      if (onSuccess) onSuccess(activeUser);
+      if (onSuccess) onSuccess(user);
     } catch (err) {
-      console.warn('Unlock error', err);
-      errorMessage = 'Failed to decrypt local key pickle with this password.';
-    } finally {
+      errorMessage = err.message || 'Token verification failed.';
       isLoading = false;
       render();
     }
@@ -180,9 +161,7 @@ export function createAuthModal({ onSuccess }) {
             <div class="nav-logo" style="width:28px; height:28px; font-size:13px; margin:0;">I</div>
             <span class="modal-title">
               ${
-                mode === 'unlock'
-                  ? 'Unlock End-to-End Encryption'
-                  : mode === 'oauth-code'
+                mode === 'oauth-code'
                   ? 'Authorize Introvert'
                   : mode === 'token'
                   ? 'Sign In with Token'
@@ -205,7 +184,7 @@ export function createAuthModal({ onSuccess }) {
             mode === 'oauth'
               ? `
             <p style="font-size:13px; color:var(--text-muted); line-height:1.45;">
-              Sign in securely via OAuth 2.0 PKCE. Your password remains private on your Extrovert server.
+              Sign in securely via OAuth 2.0 PKCE. Your account and encryption keys are protected on this device.
             </p>
 
             <div class="form-group">
@@ -243,8 +222,7 @@ export function createAuthModal({ onSuccess }) {
               </button>
             </div>
           `
-              : mode === 'token'
-              ? `
+              : `
             <div class="form-group">
               <label class="form-label">Instance Server URL</label>
               <input type="text" class="form-input" id="auth-server" value="${escapeHtml(serverUrl)}" />
@@ -259,23 +237,6 @@ export function createAuthModal({ onSuccess }) {
               </button>
             </div>
           `
-              : `
-            <p style="font-size:13px; color:var(--text-muted); line-height:1.45;">
-              Signed in as <strong>@${escapeHtml(config.currentUser?.username || '')}</strong>.<br>
-              Enter your password to unlock your Double-Ratchet Olm encryption keys and decrypt your messages.
-            </p>
-
-            <div class="form-group">
-              <label class="form-label">Account Password</label>
-              <input type="password" class="form-input" id="auth-password" placeholder="Enter password to unlock E2EE" autofocus />
-            </div>
-
-            <div style="margin-top:12px;">
-              <button class="btn-pill primary" id="unlock-e2ee-btn" ${isLoading ? 'disabled' : ''} style="width:100%; justify-content:center; height:40px; font-weight:600;">
-                ${isLoading ? 'Unlocking Keys...' : 'Unlock Encryption & Enter'}
-              </button>
-            </div>
-          `
           }
         </div>
 
@@ -285,11 +246,9 @@ export function createAuthModal({ onSuccess }) {
               ? `<button class="btn-pill" id="switch-to-token-btn" style="border:none; padding:0; background:transparent; color:var(--text-muted); font-size:12px;">
                   Use Direct Access Token
                 </button>`
-              : mode === 'token' || mode === 'oauth-code'
-              ? `<button class="btn-pill" id="switch-to-oauth-btn" style="border:none; padding:0; background:transparent; color:var(--text-muted); font-size:12px;">
+              : `<button class="btn-pill" id="switch-to-oauth-btn" style="border:none; padding:0; background:transparent; color:var(--text-muted); font-size:12px;">
                   Back to OAuth Sign In
                 </button>`
-              : '<div></div>'
           }
         </div>
       </div>
@@ -333,16 +292,6 @@ export function createAuthModal({ onSuccess }) {
     }
 
     overlay.querySelector('#login-token-btn')?.addEventListener('click', loginWithDirectToken);
-
-    const pwInput = overlay.querySelector('#auth-password');
-    if (pwInput) {
-      pwInput.addEventListener('input', (e) => (password = e.target.value));
-      pwInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') handleUnlock();
-      });
-    }
-
-    overlay.querySelector('#unlock-e2ee-btn')?.addEventListener('click', handleUnlock);
 
     overlay.querySelector('#switch-to-token-btn')?.addEventListener('click', () => {
       mode = 'token';

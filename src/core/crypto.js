@@ -295,19 +295,19 @@ class CryptoEngine {
     } catch (e) {}
   }
 
-  async ensureReady({ onNeedsPassword } = {}) {
+  async ensureReady() {
     await this.initOlm();
     await this.getOrCreateDeviceKey();
-    const acct = await this.loadAccountFromStorage();
-    if (acct) {
+    let acct = await this.loadAccountFromStorage();
+    if (!acct) {
+      // First time on this device: generate fresh Olm account and publish keys
+      await this.createAndPublishAccount();
+      await this.initSelfSession();
+    } else {
       await this.loadSelfSessions();
       this.maybeReplenishPrekeys();
-      return true;
     }
-    if (onNeedsPassword) {
-      onNeedsPassword();
-    }
-    return false;
+    return true;
   }
 
   async unlockWithPassword(password, username) {
