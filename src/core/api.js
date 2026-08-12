@@ -88,13 +88,19 @@ class ApiClient {
     return data.data || data;
   }
 
-  async initOAuth(serverUrl = config.serverUrl) {
+  async initOAuth(serverUrl = config.serverUrl, preconfiguredApp = null) {
     await config.setServerUrl(serverUrl);
     const base = config.serverUrl;
 
-    const app = await this.registerApp(base);
-    const clientId = app.client_id;
-    const clientSecret = app.client_secret;
+    let clientId, clientSecret;
+    if (preconfiguredApp && preconfiguredApp.clientId) {
+      clientId = preconfiguredApp.clientId;
+      clientSecret = preconfiguredApp.clientSecret || null;
+    } else {
+      const app = await this.registerApp(base);
+      clientId = app.client_id;
+      clientSecret = app.client_secret;
+    }
     const redirectUri = 'urn:ietf:wg:oauth:2.0:oob';
     const scopes = 'openid profile read write follow media.write notifications read:direct write:direct';
 

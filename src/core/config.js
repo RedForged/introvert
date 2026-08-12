@@ -47,7 +47,7 @@ export const storage = {
   }
 };
 
-const DEFAULT_SERVER_URL = 'http://localhost:3000';
+const DEFAULT_SERVER_URL = 'https://extrovert.redforged.eu';
 
 class ConfigManager {
   constructor() {

@@ -12,7 +12,7 @@ export function createAuthModal({ onSuccess }) {
   overlay.id = 'auth-modal-root';
 
   let mode = 'oauth'; // 'oauth' | 'oauth-code' | 'token' | 'unlock'
-  let serverUrl = config.serverUrl || 'http://localhost:3000';
+  let serverUrl = config.serverUrl || 'https://extrovert.redforged.eu';
   let authCodeInput = '';
   let directTokenInput = '';
   let password = '';
@@ -171,7 +171,7 @@ export function createAuthModal({ onSuccess }) {
 
             <div class="form-group">
               <label class="form-label">Instance Server URL</label>
-              <input type="text" class="form-input" id="auth-server" value="${escapeHtml(serverUrl)}" placeholder="http://localhost:3000" />
+              <input type="text" class="form-input" id="auth-server" value="${escapeHtml(serverUrl)}" placeholder="https://extrovert.redforged.eu" />
             </div>
 
             <div style="margin-top:12px;">
