@@ -18,12 +18,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: 'npm'
+
       - name: Install dependencies
         run: npm ci || npm install
+
       - name: Run verification tests
         run: npm test
 
@@ -35,25 +38,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: 'macos-arm64'
+          - platform: 'macos-universal'
             os: macos-latest
-            args: '--target aarch64-apple-darwin'
-            target: aarch64-apple-darwin
-
-          - platform: 'macos-x86_64'
-            os: macos-13
-            args: '--target x86_64-apple-darwin'
-            target: x86_64-apple-darwin
+            args: '--target universal-apple-darwin'
+            target: 'aarch64-apple-darwin,x86_64-apple-darwin'
 
           - platform: 'linux-x86_64'
             os: ubuntu-22.04
             args: ''
-            target: x86_64-unknown-linux-gnu
+            target: 'x86_64-unknown-linux-gnu'
 
           - platform: 'windows-x86_64'
             os: windows-latest
             args: ''
-            target: x86_64-pc-windows-msvc
+            target: 'x86_64-pc-windows-msvc'
 
     steps:
       - uses: actions/checkout@v4
@@ -89,53 +87,3 @@ jobs:
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
-
-  build-android:
-    name: Build Android APK
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Java 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'zulu'
-          java-version: 17
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install NDK
-        run: sdkmanager "ndk;26.1.10909125"
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: 'npm'
-
-      - name: Install Rust Stable & Android Targets
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
-
-      - name: Install npm dependencies
-        run: npm ci || npm install
-
-      - name: Build Frontend Assets
-        run: npm run build
-
-      - name: Initialize & Build Android APK
-        env:
-          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/26.1.10909125
-        run: |
-          npx @tauri-apps/cli android init || true
-          npx @tauri-apps/cli android build --apk || true
-
-      - name: Upload Android APK Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: introvert-android-apk
-          path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
-          if-no-files-found: ignore

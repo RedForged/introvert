@@ -9,9 +9,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 async function loadOlm() {
-  const OlmModule = await import('/Users/lea/extrovert/node_modules/@matrix-org/olm/olm.js');
+  const OlmModule = await import('@matrix-org/olm');
   const Olm = OlmModule.default || OlmModule;
-  const wasm = fs.readFileSync('/Users/lea/introvert/public/lib/olm.wasm');
+  const wasmPath = path.join(__dirname, '../public/lib/olm.wasm');
+  const wasm = fs.readFileSync(wasmPath);
   await Olm.init({ wasmBinary: wasm });
   return Olm;
 }
@@ -225,7 +226,7 @@ async function runTests() {
   console.log('\n--- 4. Cross-Platform Tauri v2 Integrity Tests ---');
 
   test('Tauri v2 configuration file exists and has valid configuration', () => {
-    const tauriConfPath = '/Users/lea/introvert/src-tauri/tauri.conf.json';
+    const tauriConfPath = path.join(__dirname, '../src-tauri/tauri.conf.json');
     assert(fs.existsSync(tauriConfPath), 'tauri.conf.json must exist');
     const conf = JSON.parse(fs.readFileSync(tauriConfPath, 'utf8'));
     assert.strictEqual(conf.productName, 'Introvert');
@@ -233,15 +234,15 @@ async function runTests() {
   });
 
   test('Tauri capability permissions exist', () => {
-    const capPath = '/Users/lea/introvert/src-tauri/capabilities/default.json';
+    const capPath = path.join(__dirname, '../src-tauri/capabilities/default.json');
     assert(fs.existsSync(capPath), 'capabilities/default.json must exist');
     const cap = JSON.parse(fs.readFileSync(capPath, 'utf8'));
     assert(cap.permissions.includes('core:default'));
   });
 
   test('Olm WebAssembly distribution files exist in public/lib', () => {
-    assert(fs.existsSync('/Users/lea/introvert/public/lib/olm.js'));
-    assert(fs.existsSync('/Users/lea/introvert/public/lib/olm.wasm'));
+    assert(fs.existsSync(path.join(__dirname, '../public/lib/olm.js')));
+    assert(fs.existsSync(path.join(__dirname, '../public/lib/olm.wasm')));
   });
 
   console.log(`\n========================================`);
