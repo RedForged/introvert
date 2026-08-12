@@ -1,0 +1,19 @@
+# Node dependencies
+node_modules/
+dist/
+.vite/
+
+# Tauri / Rust build artifacts
+src-tauri/target/
+src-tauri/gen/
+**/*.rs.bk
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Logs & Environment
+*.log
+.env
+.env.local
+.env.*.local
