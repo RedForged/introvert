@@ -105,7 +105,7 @@ class ApiClient {
         console.warn('Auto-register app failed, falling back to official client ID', err);
       }
     }
-    const redirectUri = 'urn:ietf:wg:oauth:2.0:oob';
+    const redirectUri = 'http://localhost:1420/oauth/callback';
     const scopes = 'openid profile read write follow media.write notifications read:direct write:direct';
 
     const verifier = this.generateRandomString(64);

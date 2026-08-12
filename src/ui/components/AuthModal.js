@@ -20,6 +20,19 @@ export function createAuthModal({ onSuccess }) {
   let isLoading = false;
   let errorMessage = '';
 
+  const openExternalUrl = async (url) => {
+    try {
+      const { open } = await import('@tauri-apps/plugin-shell');
+      await open(url);
+    } catch (e) {
+      try {
+        window.open(url, '_blank');
+      } catch (e2) {
+        console.warn('Fallback browser open failed', e2);
+      }
+    }
+  };
+
   const startOAuthFlow = async () => {
     if (!serverUrl) {
       errorMessage = 'Please enter your Extrovert server URL.';
@@ -38,12 +51,7 @@ export function createAuthModal({ onSuccess }) {
       isLoading = false;
       render();
 
-      // Open in browser
-      try {
-        window.open(authUrl, '_blank');
-      } catch (e) {
-        console.warn('Unable to auto-open browser', e);
-      }
+      await openExternalUrl(authUrl);
     } catch (err) {
       errorMessage = err.message || 'Failed to initialize OAuth connection to server.';
       isLoading = false;
@@ -187,7 +195,7 @@ export function createAuthModal({ onSuccess }) {
                 <strong>Step 1:</strong> An authorization window has been opened in your browser.
               </p>
               <p style="margin-bottom:12px; font-size:12.5px; color:var(--text-muted);">
-                If the window didn't open automatically, <a href="${escapeHtml(authorizeUrl)}" target="_blank" style="color:var(--accent); text-decoration:underline;">click here to open the authorization page</a>.
+                If the window didn't open automatically, <a href="#" id="manual-auth-link" style="color:var(--accent); text-decoration:underline; cursor:pointer;">click here to open the authorization page</a>.
               </p>
               <p style="margin-bottom:8px;">
                 <strong>Step 2:</strong> Click <strong>Authorize</strong> in your browser, then copy & paste the authorization code below:
@@ -263,6 +271,11 @@ export function createAuthModal({ onSuccess }) {
     overlay.querySelector('#auth-server')?.addEventListener('input', (e) => (serverUrl = e.target.value));
 
     overlay.querySelector('#start-oauth-btn')?.addEventListener('click', startOAuthFlow);
+
+    overlay.querySelector('#manual-auth-link')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (authorizeUrl) openExternalUrl(authorizeUrl);
+    });
 
     const codeInput = overlay.querySelector('#oauth-code-input');
     if (codeInput) {
