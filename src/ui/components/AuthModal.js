@@ -1,7 +1,7 @@
 // Introvert Authentication & E2EE Unlock Modal Component (OAuth 2.0 PKCE)
 
 import { authStore, bootstrapAuthenticatedData, showToast } from '../../core/state.js';
-import { config } from '../../core/config.js';
+import { config, OFFICIAL_CLIENT_ID } from '../../core/config.js';
 import { api } from '../../core/api.js';
 import { cryptoEngine } from '../../core/crypto.js';
 import { signaling } from '../../core/signaling.js';
@@ -13,6 +13,7 @@ export function createAuthModal({ onSuccess }) {
 
   let mode = 'oauth'; // 'oauth' | 'oauth-code' | 'token' | 'unlock'
   let serverUrl = config.serverUrl || 'https://extrovert.redforged.eu';
+  let customClientId = OFFICIAL_CLIENT_ID;
   let authCodeInput = '';
   let directTokenInput = '';
   let password = '';
@@ -45,7 +46,7 @@ export function createAuthModal({ onSuccess }) {
     render();
 
     try {
-      const { authorizeUrl: authUrl } = await api.initOAuth(serverUrl);
+      const { authorizeUrl: authUrl } = await api.initOAuth(serverUrl, { clientId: customClientId.trim() });
       authorizeUrl = authUrl;
       mode = 'oauth-code';
       isLoading = false;
@@ -182,7 +183,12 @@ export function createAuthModal({ onSuccess }) {
               <input type="text" class="form-input" id="auth-server" value="${escapeHtml(serverUrl)}" placeholder="https://extrovert.redforged.eu" />
             </div>
 
-            <div style="margin-top:12px;">
+            <div class="form-group" style="margin-top:10px;">
+              <label class="form-label">OAuth Client ID</label>
+              <input type="text" class="form-input" id="auth-client-id" value="${escapeHtml(customClientId)}" placeholder="OAuth Client ID" style="font-family:var(--font-mono); font-size:12px;" />
+            </div>
+
+            <div style="margin-top:14px;">
               <button class="btn-pill primary" id="start-oauth-btn" ${isLoading ? 'disabled' : ''} style="width:100%; justify-content:center; height:42px; font-size:14px; font-weight:600;">
                 ${isLoading ? 'Connecting to Server...' : 'Sign in with Extrovert (OAuth)'}
               </button>
@@ -269,6 +275,7 @@ export function createAuthModal({ onSuccess }) {
 
   const attachHandlers = () => {
     overlay.querySelector('#auth-server')?.addEventListener('input', (e) => (serverUrl = e.target.value));
+    overlay.querySelector('#auth-client-id')?.addEventListener('input', (e) => (customClientId = e.target.value));
 
     overlay.querySelector('#start-oauth-btn')?.addEventListener('click', startOAuthFlow);
 
