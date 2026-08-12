@@ -64,17 +64,155 @@ class ApiClient {
     return data;
   }
 
-  // --- Authentication ---
+  // --- Authentication (OAuth 2.0 with PKCE) ---
 
-  async registerApp(name = 'Introvert Native', redirectUris = ['http://localhost:1420/oauth/callback']) {
-    return this.request('/api/v1/oauth/apps', {
+  async registerApp(serverUrl = config.serverUrl) {
+    const base = serverUrl.replace(/\/+$/, '');
+    const res = await fetch(`${base}/api/v1/oauth/apps`, {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        name,
-        redirect_uris: redirectUris,
+        name: 'Introvert Client',
+        redirect_uris: ['http://localhost:1420/oauth/callback', 'urn:ietf:wg:oauth:2.0:oob'],
         scopes: 'openid profile read write follow media.write notifications read:direct write:direct',
+        website: 'https://github.com/RedForged/introvert',
       }),
     });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Failed to register OAuth app on ${base}: ${text || res.statusText}`);
+    }
+
+    const data = await res.json();
+    return data.data || data;
+  }
+
+  async initOAuth(serverUrl = config.serverUrl) {
+    await config.setServerUrl(serverUrl);
+    const base = config.serverUrl;
+
+    const app = await this.registerApp(base);
+    const clientId = app.client_id;
+    const clientSecret = app.client_secret;
+    const redirectUri = 'urn:ietf:wg:oauth:2.0:oob';
+    const scopes = 'openid profile read write follow media.write notifications read:direct write:direct';
+
+    const verifier = this.generateRandomString(64);
+    const challenge = await this.sha256Base64Url(verifier);
+    const state = this.generateRandomString(16);
+
+    const authorizeUrl = `${base}/api/v1/oauth/authorize?client_id=${encodeURIComponent(clientId)}&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(scopes)}&code_challenge=${encodeURIComponent(challenge)}&code_challenge_method=S256&state=${encodeURIComponent(state)}`;
+
+    const oauthSession = {
+      clientId,
+      clientSecret,
+      redirectUri,
+      verifier,
+      state,
+      serverUrl: base,
+      createdAt: Date.now(),
+    };
+
+    localStorage.setItem('introvert_pending_oauth', JSON.stringify(oauthSession));
+
+    return {
+      authorizeUrl,
+      oauthSession,
+    };
+  }
+
+  async completeOAuth(authCodeOrUrl, pendingSession = null) {
+    let session = pendingSession;
+    if (!session) {
+      const stored = localStorage.getItem('introvert_pending_oauth');
+      if (stored) {
+        try {
+          session = JSON.parse(stored);
+        } catch (e) {}
+      }
+    }
+
+    if (!session) {
+      throw new Error('No pending OAuth authorization session found. Please start sign-in again.');
+    }
+
+    // Extract authorization code
+    let code = authCodeOrUrl.trim();
+    if (code.includes('code=')) {
+      try {
+        const urlObj = new URL(code.startsWith('http') ? code : `http://localhost/${code}`);
+        code = urlObj.searchParams.get('code') || code;
+      } catch (e) {
+        const m = code.match(/code=([^&]+)/);
+        if (m) code = decodeURIComponent(m[1]);
+      }
+    }
+
+    if (!code) {
+      throw new Error('Please enter a valid authorization code.');
+    }
+
+    const base = session.serverUrl || config.serverUrl;
+    await config.setServerUrl(base);
+
+    const tokenRes = await fetch(`${base}/api/v1/oauth/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'authorization_code',
+        client_id: session.clientId,
+        client_secret: session.clientSecret,
+        code,
+        code_verifier: session.verifier,
+        redirect_uri: session.redirectUri,
+      }),
+    });
+
+    if (!tokenRes.ok) {
+      const errData = await tokenRes.json().catch(() => ({}));
+      throw new Error(errData.detail || errData.error_description || errData.error || `Token exchange failed (HTTP ${tokenRes.status})`);
+    }
+
+    const tokenData = await tokenRes.json();
+    const accessToken = tokenData.access_token;
+    const refreshToken = tokenData.refresh_token;
+
+    // Verify credentials to load user profile
+    const meRes = await fetch(`${base}/api/v1/accounts/verify_credentials`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    if (!meRes.ok) {
+      throw new Error('Failed to verify user credentials with new access token.');
+    }
+
+    const meData = await meRes.json();
+    const user = meData.data || meData;
+
+    await config.setAuth(accessToken, refreshToken, user);
+    localStorage.removeItem('introvert_pending_oauth');
+
+    return { user, accessToken, refreshToken };
+  }
+
+  async loginWithToken(token, serverUrl = config.serverUrl) {
+    await config.setServerUrl(serverUrl);
+    const base = config.serverUrl;
+
+    const meRes = await fetch(`${base}/api/v1/accounts/verify_credentials`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (!meRes.ok) {
+      throw new Error('Invalid bearer token or unable to verify account.');
+    }
+
+    const meData = await meRes.json();
+    const user = meData.data || meData;
+
+    await config.setAuth(token, null, user);
+    return { user, accessToken: token };
   }
 
   async getCaptchaSvg() {
@@ -85,7 +223,6 @@ class ApiClient {
   }
 
   async register({ username, password, displayName, ref, captcha }) {
-    // Extrovert registration endpoint
     const res = await fetch(config.getApiUrl('/register'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -99,133 +236,13 @@ class ApiClient {
       redirect: 'manual',
     });
 
-    // If redirected or status 200/302, try logging in to obtain tokens
     if (res.status === 302 || res.status === 200 || res.ok) {
-      return this.login(username, password);
+      return this.initOAuth(config.serverUrl);
     }
     const text = await res.text();
-    // Check if there's an error message in HTML
     const match = text.match(/class="error"[^>]*>([^<]+)<\/div>/i) || text.match(/error:\s*([^<\n]+)/i);
     const errorMsg = match ? match[1].trim() : 'Registration failed. Please check your details.';
     throw new Error(errorMsg);
-  }
-
-  async login(username, password) {
-    // We register an OAuth client or use direct token exchange if client exists
-    // Extrovert supports OAuth 2.0 PKCE / client token endpoints
-    // To provide the smoothest native login experience:
-    try {
-      // Direct session login + OAuth app registration or credentials verification
-      const loginRes = await fetch(config.getApiUrl('/login'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ username, password }),
-        redirect: 'manual',
-      });
-
-      // Extract connect.sid cookie if present or check redirected session
-      const setCookie = loginRes.headers.get('set-cookie');
-      let sid = null;
-      if (setCookie) {
-        const m = setCookie.match(/connect\.sid=([^;]+)/);
-        if (m) sid = decodeURIComponent(m[1]);
-      }
-
-      // Now create or obtain OAuth app token for native client
-      // Let's create an app and authorize
-      const appsRes = await fetch(config.getApiUrl('/api/v1/oauth/apps'), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(sid ? { Cookie: `connect.sid=${encodeURIComponent(sid)}` } : {}),
-        },
-        credentials: 'include',
-        body: JSON.stringify({
-          name: 'Introvert Client',
-          redirect_uris: ['http://localhost:1420/oauth/callback'],
-          scopes: 'openid profile read write follow media.write notifications read:direct write:direct',
-        }),
-      });
-
-      let clientId, clientSecret;
-      if (appsRes.ok) {
-        const appData = await appsRes.json();
-        clientId = appData.data.client_id;
-        clientSecret = appData.data.client_secret;
-      }
-
-      // Generate code_verifier and code_challenge for PKCE
-      const verifier = this.generateRandomString(64);
-      const challenge = await this.sha256Base64Url(verifier);
-
-      // Submit authorization request
-      const authRes = await fetch(config.getApiUrl('/api/v1/oauth/authorize'), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          ...(sid ? { Cookie: `connect.sid=${encodeURIComponent(sid)}` } : {}),
-        },
-        credentials: 'include',
-        body: new URLSearchParams({
-          client_id: clientId || 'introvert_client',
-          redirect_uri: 'http://localhost:1420/oauth/callback',
-          response_type: 'code',
-          scope: 'openid profile read write follow media.write notifications read:direct write:direct',
-          code_challenge: challenge,
-          code_challenge_method: 'S256',
-          approve: 'yes',
-        }),
-        redirect: 'manual',
-      });
-
-      let code = null;
-      const location = authRes.headers.get('location') || '';
-      if (location) {
-        const urlObj = new URL(location, 'http://localhost:1420');
-        code = urlObj.searchParams.get('code');
-      }
-
-      if (code && clientId) {
-        // Exchange code for token
-        const tokenRes = await fetch(config.getApiUrl('/api/v1/oauth/token'), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            grant_type: 'authorization_code',
-            client_id: clientId,
-            client_secret: clientSecret,
-            code,
-            code_verifier: verifier,
-            redirect_uri: 'http://localhost:1420/oauth/callback',
-          }),
-        });
-
-        if (tokenRes.ok) {
-          const tokenData = await tokenRes.json();
-          const accessToken = tokenData.access_token;
-          const refreshToken = tokenData.refresh_token;
-
-          // Fetch user credentials
-          const meRes = await fetch(config.getApiUrl('/api/v1/accounts/verify_credentials'), {
-            headers: { Authorization: `Bearer ${accessToken}` },
-          });
-
-          if (meRes.ok) {
-            const meData = await meRes.json();
-            const user = meData.data;
-            await config.setAuth(accessToken, refreshToken, user);
-            return { user, accessToken, refreshToken };
-          }
-        }
-      }
-
-      // Fallback: If OAuth exchange had an issue, verify credentials with session or fallback token
-      const meDirect = await this.verifyCredentials();
-      return { user: meDirect, accessToken: config.token };
-    } catch (err) {
-      console.error('Login process error', err);
-      throw new Error(`Login failed: ${err.message}`);
-    }
   }
 
   async refreshAccessToken() {

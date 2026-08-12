@@ -1,4 +1,4 @@
-// Introvert Authentication & E2EE Unlock Modal Component
+// Introvert Authentication & E2EE Unlock Modal Component (OAuth 2.0 PKCE)
 
 import { authStore, bootstrapAuthenticatedData, showToast } from '../../core/state.js';
 import { config } from '../../core/config.js';
@@ -11,29 +11,18 @@ export function createAuthModal({ onSuccess }) {
   overlay.className = 'modal-overlay';
   overlay.id = 'auth-modal-root';
 
-  let mode = 'login'; // 'login' | 'register' | 'unlock'
-  let serverUrl = config.serverUrl;
-  let username = '';
+  let mode = 'oauth'; // 'oauth' | 'oauth-code' | 'token' | 'unlock'
+  let serverUrl = config.serverUrl || 'http://localhost:3000';
+  let authCodeInput = '';
+  let directTokenInput = '';
   let password = '';
-  let displayName = '';
-  let refCode = '';
-  let captchaAnswer = '';
-  let captchaSvg = '';
+  let authorizeUrl = '';
   let isLoading = false;
   let errorMessage = '';
 
-  const loadCaptcha = async () => {
-    try {
-      captchaSvg = await api.getCaptchaSvg();
-      render();
-    } catch (e) {
-      console.warn('Captcha load failed', e);
-    }
-  };
-
-  const handleLogin = async () => {
-    if (!username || !password) {
-      errorMessage = 'Please enter your username and password.';
+  const startOAuthFlow = async () => {
+    if (!serverUrl) {
+      errorMessage = 'Please enter your Extrovert server URL.';
       render();
       return;
     }
@@ -43,33 +32,28 @@ export function createAuthModal({ onSuccess }) {
     render();
 
     try {
-      await config.setServerUrl(serverUrl);
-      const { user } = await api.login(username, password);
+      const { authorizeUrl: authUrl } = await api.initOAuth(serverUrl);
+      authorizeUrl = authUrl;
+      mode = 'oauth-code';
+      isLoading = false;
+      render();
 
-      // Attempt E2EE unlock
+      // Open in browser
       try {
-        await cryptoEngine.unlockWithPassword(password, username);
+        window.open(authUrl, '_blank');
       } catch (e) {
-        console.warn('Initial E2EE unlock with login password', e);
+        console.warn('Unable to auto-open browser', e);
       }
-
-      signaling.connect();
-      await bootstrapAuthenticatedData();
-
-      showToast('success', `Welcome back, ${user.display_name || user.username}!`);
-      overlay.remove();
-      if (onSuccess) onSuccess(user);
     } catch (err) {
-      errorMessage = err.message || 'Login failed.';
-    } finally {
+      errorMessage = err.message || 'Failed to initialize OAuth connection to server.';
       isLoading = false;
       render();
     }
   };
 
-  const handleRegister = async () => {
-    if (!username || !password) {
-      errorMessage = 'Username and password are required.';
+  const completeOAuthFlow = async () => {
+    if (!authCodeInput.trim()) {
+      errorMessage = 'Please paste the authorization code or redirect URL.';
       render();
       return;
     }
@@ -79,30 +63,39 @@ export function createAuthModal({ onSuccess }) {
     render();
 
     try {
-      await config.setServerUrl(serverUrl);
-      const { user } = await api.register({
-        username,
-        password,
-        displayName: displayName || username,
-        ref: refCode,
-        captcha: captchaAnswer,
-      });
-
-      // Init and publish Olm Account
-      try {
-        await cryptoEngine.unlockWithPassword(password, username);
-      } catch (e) {}
-
-      signaling.connect();
-      await bootstrapAuthenticatedData();
-
-      showToast('success', `Account created! Welcome, ${user.display_name || user.username}`);
-      overlay.remove();
-      if (onSuccess) onSuccess(user);
+      const { user } = await api.completeOAuth(authCodeInput);
+      mode = 'unlock';
+      isLoading = false;
+      errorMessage = '';
+      showToast('success', `Signed in as @${user.username}!`);
+      render();
     } catch (err) {
-      errorMessage = err.message || 'Registration failed.';
-      loadCaptcha();
-    } finally {
+      errorMessage = err.message || 'OAuth token exchange failed.';
+      isLoading = false;
+      render();
+    }
+  };
+
+  const loginWithDirectToken = async () => {
+    if (!directTokenInput.trim()) {
+      errorMessage = 'Please enter a valid bearer access token.';
+      render();
+      return;
+    }
+
+    isLoading = true;
+    errorMessage = '';
+    render();
+
+    try {
+      const { user } = await api.loginWithToken(directTokenInput.trim(), serverUrl);
+      mode = 'unlock';
+      isLoading = false;
+      errorMessage = '';
+      showToast('success', `Signed in as @${user.username}!`);
+      render();
+    } catch (err) {
+      errorMessage = err.message || 'Token verification failed.';
       isLoading = false;
       render();
     }
@@ -110,7 +103,7 @@ export function createAuthModal({ onSuccess }) {
 
   const handleUnlock = async () => {
     if (!password) {
-      errorMessage = 'Please enter your password to unlock encryption.';
+      errorMessage = 'Please enter your password / passphrase to unlock encryption.';
       render();
       return;
     }
@@ -121,13 +114,19 @@ export function createAuthModal({ onSuccess }) {
 
     try {
       const activeUser = config.currentUser;
-      await cryptoEngine.unlockWithPassword(password, activeUser.username);
-      authStore.set({ isE2eeReady: true });
-      showToast('success', 'Encryption keys unlocked!');
+      if (activeUser) {
+        await cryptoEngine.unlockWithPassword(password, activeUser.username);
+      }
+      authStore.set({ isE2eeReady: true, isAuthenticated: true, user: activeUser });
+      signaling.connect();
+      await bootstrapAuthenticatedData();
+
+      showToast('success', 'Encryption unlocked & connected!');
       overlay.remove();
       if (onSuccess) onSuccess(activeUser);
     } catch (err) {
-      errorMessage = 'Incorrect password or failed to unpickle keys.';
+      console.warn('Unlock error', err);
+      errorMessage = 'Failed to decrypt local key pickle with this password.';
     } finally {
       isLoading = false;
       render();
@@ -136,105 +135,123 @@ export function createAuthModal({ onSuccess }) {
 
   const render = () => {
     overlay.innerHTML = `
-      <div class="modal-card" style="max-width:400px;">
+      <div class="modal-card" style="max-width:440px;">
         <div class="modal-header">
           <div style="display:flex; align-items:center; gap:8px;">
             <div class="nav-logo" style="width:28px; height:28px; font-size:13px; margin:0;">I</div>
-            <span class="modal-title">${mode === 'login' ? 'Sign In to Introvert' : mode === 'register' ? 'Create Account' : 'Unlock E2EE'}</span>
+            <span class="modal-title">
+              ${
+                mode === 'unlock'
+                  ? 'Unlock End-to-End Encryption'
+                  : mode === 'oauth-code'
+                  ? 'Authorize Introvert'
+                  : mode === 'token'
+                  ? 'Sign In with Token'
+                  : 'Connect to Extrovert'
+              }
+            </span>
           </div>
         </div>
 
         <div class="modal-body">
           ${
             errorMessage
-              ? `<div style="background:rgba(244,63,94,0.15); border:1px solid var(--rose); color:var(--rose); padding:10px 12px; border-radius:var(--radius-sm); font-size:12.5px;">
+              ? `<div style="background:rgba(244,63,94,0.15); border:1px solid var(--rose); color:var(--rose); padding:10px 12px; border-radius:var(--radius-sm); font-size:12.5px; word-break:break-word;">
                   ${escapeHtml(errorMessage)}
                 </div>`
               : ''
           }
 
           ${
-            mode === 'unlock'
+            mode === 'oauth'
               ? `
             <p style="font-size:13px; color:var(--text-muted); line-height:1.45;">
-              Enter your account password to decrypt your Olm Double-Ratchet keys and access your encrypted chats.
+              Introvert connects securely to your Extrovert instance using OAuth 2.0 with PKCE without storing your plaintext password.
             </p>
+
             <div class="form-group">
-              <label class="form-label">Password</label>
-              <input type="password" class="form-input" id="auth-password" placeholder="Enter password" />
-            </div>
-          `
-              : `
-            <div class="form-group">
-              <label class="form-label">Server Instance URL</label>
+              <label class="form-label">Instance Server URL</label>
               <input type="text" class="form-input" id="auth-server" value="${escapeHtml(serverUrl)}" placeholder="http://localhost:3000" />
             </div>
 
-            <div class="form-group">
-              <label class="form-label">Username</label>
-              <input type="text" class="form-input" id="auth-username" value="${escapeHtml(username)}" placeholder="e.g. alice" autocomplete="username" />
+            <div style="margin-top:12px;">
+              <button class="btn-pill primary" id="start-oauth-btn" ${isLoading ? 'disabled' : ''} style="width:100%; justify-content:center; height:42px; font-size:14px; font-weight:600;">
+                ${isLoading ? 'Connecting to Server...' : 'Sign in with Extrovert (OAuth)'}
+              </button>
+            </div>
+          `
+              : mode === 'oauth-code'
+              ? `
+            <div style="font-size:13px; color:var(--text-main); line-height:1.5;">
+              <p style="margin-bottom:8px;">
+                <strong>Step 1:</strong> An authorization window has been opened in your browser.
+              </p>
+              <p style="margin-bottom:12px; font-size:12.5px; color:var(--text-muted);">
+                If the window didn't open automatically, <a href="${escapeHtml(authorizeUrl)}" target="_blank" style="color:var(--accent); text-decoration:underline;">click here to open the authorization page</a>.
+              </p>
+              <p style="margin-bottom:8px;">
+                <strong>Step 2:</strong> Click <strong>Authorize</strong> in your browser, then copy & paste the authorization code below:
+              </p>
             </div>
 
-            ${
-              mode === 'register'
-                ? `
-              <div class="form-group">
-                <label class="form-label">Display Name</label>
-                <input type="text" class="form-input" id="auth-display-name" value="${escapeHtml(displayName)}" placeholder="e.g. Alice" />
-              </div>
-            `
-                : ''
-            }
-
             <div class="form-group">
-              <label class="form-label">Password</label>
-              <input type="password" class="form-input" id="auth-password" placeholder="Password (min 12 characters)" autocomplete="${mode === 'login' ? 'current-password' : 'new-password'}" />
+              <input type="text" class="form-input" id="oauth-code-input" placeholder="Paste authorization code or redirect link..." value="${escapeHtml(authCodeInput)}" autofocus />
             </div>
 
-            ${
-              mode === 'register'
-                ? `
-              <div class="form-group">
-                <label class="form-label">Referral Code (Optional)</label>
-                <input type="text" class="form-input" id="auth-ref" value="${escapeHtml(refCode)}" placeholder="Referral code if you have one" />
-              </div>
+            <div style="margin-top:12px;">
+              <button class="btn-pill primary" id="complete-oauth-btn" ${isLoading ? 'disabled' : ''} style="width:100%; justify-content:center; height:40px; font-size:13.5px; font-weight:600;">
+                ${isLoading ? 'Exchanging Token...' : 'Complete Sign In'}
+              </button>
+            </div>
+          `
+              : mode === 'token'
+              ? `
+            <div class="form-group">
+              <label class="form-label">Instance Server URL</label>
+              <input type="text" class="form-input" id="auth-server" value="${escapeHtml(serverUrl)}" />
+            </div>
+            <div class="form-group" style="margin-top:10px;">
+              <label class="form-label">Bearer Access Token</label>
+              <input type="password" class="form-input" id="direct-token-input" placeholder="Paste bearer token" />
+            </div>
+            <div style="margin-top:12px;">
+              <button class="btn-pill primary" id="login-token-btn" ${isLoading ? 'disabled' : ''} style="width:100%; justify-content:center; height:40px;">
+                ${isLoading ? 'Verifying...' : 'Sign In with Token'}
+              </button>
+            </div>
+          `
+              : `
+            <p style="font-size:13px; color:var(--text-muted); line-height:1.45;">
+              Signed in as <strong>@${escapeHtml(config.currentUser?.username || '')}</strong>.<br>
+              Enter your password to unlock your Double-Ratchet Olm encryption keys and decrypt your messages.
+            </p>
 
-              <div class="form-group">
-                <label class="form-label">Anti-Bot Verification</label>
-                <div style="display:flex; align-items:center; gap:8px;">
-                  <div id="captcha-svg-container" style="background:#fff; border-radius:var(--radius-sm); padding:4px; max-height:48px; overflow:hidden; flex-shrink:0;">
-                    ${captchaSvg || '<span style="color:#000; font-size:11px;">Loading...</span>'}
-                  </div>
-                  <button class="icon-btn" id="reload-captcha-btn" title="Reload Challenge">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <polyline points="23 4 23 10 17 10"></polyline>
-                      <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
-                    </svg>
-                  </button>
-                </div>
-                <input type="text" class="form-input" id="auth-captcha" placeholder="Type the text shown above" style="margin-top:6px;" />
-              </div>
-            `
-                : ''
-            }
+            <div class="form-group">
+              <label class="form-label">Account Password</label>
+              <input type="password" class="form-input" id="auth-password" placeholder="Enter password to unlock E2EE" autofocus />
+            </div>
+
+            <div style="margin-top:12px;">
+              <button class="btn-pill primary" id="unlock-e2ee-btn" ${isLoading ? 'disabled' : ''} style="width:100%; justify-content:center; height:40px; font-weight:600;">
+                ${isLoading ? 'Unlocking Keys...' : 'Unlock Encryption & Enter'}
+              </button>
+            </div>
           `
           }
         </div>
 
         <div class="modal-footer" style="justify-content:space-between;">
           ${
-            mode !== 'unlock'
-              ? `
-            <button class="btn-pill" id="switch-mode-btn" style="border:none; padding:0; background:transparent; color:var(--text-muted);">
-              ${mode === 'login' ? "Don't have an account? Register" : 'Already registered? Sign In'}
-            </button>
-          `
+            mode === 'oauth'
+              ? `<button class="btn-pill" id="switch-to-token-btn" style="border:none; padding:0; background:transparent; color:var(--text-muted); font-size:12px;">
+                  Use Direct Access Token
+                </button>`
+              : mode === 'token' || mode === 'oauth-code'
+              ? `<button class="btn-pill" id="switch-to-oauth-btn" style="border:none; padding:0; background:transparent; color:var(--text-muted); font-size:12px;">
+                  Back to OAuth Sign In
+                </button>`
               : '<div></div>'
           }
-
-          <button class="btn-pill primary" id="auth-submit-btn" ${isLoading ? 'disabled' : ''} style="height:36px; padding:0 20px;">
-            ${isLoading ? 'Connecting...' : mode === 'login' ? 'Sign In' : mode === 'register' ? 'Register' : 'Unlock'}
-          </button>
         </div>
       </div>
     `;
@@ -243,66 +260,58 @@ export function createAuthModal({ onSuccess }) {
   };
 
   const attachHandlers = () => {
-    const serverInput = overlay.querySelector('#auth-server');
-    if (serverInput) {
-      serverInput.addEventListener('input', (e) => (serverUrl = e.target.value));
-    }
+    overlay.querySelector('#auth-server')?.addEventListener('input', (e) => (serverUrl = e.target.value));
 
-    const usernameInput = overlay.querySelector('#auth-username');
-    if (usernameInput) {
-      usernameInput.addEventListener('input', (e) => (username = e.target.value.trim()));
-    }
+    overlay.querySelector('#start-oauth-btn')?.addEventListener('click', startOAuthFlow);
 
-    const displayNameInput = overlay.querySelector('#auth-display-name');
-    if (displayNameInput) {
-      displayNameInput.addEventListener('input', (e) => (displayName = e.target.value));
-    }
-
-    const passwordInput = overlay.querySelector('#auth-password');
-    if (passwordInput) {
-      passwordInput.addEventListener('input', (e) => (password = e.target.value));
-      passwordInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-          if (mode === 'login') handleLogin();
-          else if (mode === 'register') handleRegister();
-          else if (mode === 'unlock') handleUnlock();
-        }
+    const codeInput = overlay.querySelector('#oauth-code-input');
+    if (codeInput) {
+      codeInput.addEventListener('input', (e) => (authCodeInput = e.target.value));
+      codeInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') completeOAuthFlow();
+      });
+      // Auto-submit if user pastes a URL or code
+      codeInput.addEventListener('paste', () => {
+        setTimeout(() => {
+          authCodeInput = codeInput.value;
+          if (authCodeInput.trim()) completeOAuthFlow();
+        }, 100);
       });
     }
 
-    const refInput = overlay.querySelector('#auth-ref');
-    if (refInput) {
-      refInput.addEventListener('input', (e) => (refCode = e.target.value));
-    }
+    overlay.querySelector('#complete-oauth-btn')?.addEventListener('click', completeOAuthFlow);
 
-    const captchaInput = overlay.querySelector('#auth-captcha');
-    if (captchaInput) {
-      captchaInput.addEventListener('input', (e) => (captchaAnswer = e.target.value));
-    }
-
-    const reloadCaptchaBtn = overlay.querySelector('#reload-captcha-btn');
-    if (reloadCaptchaBtn) {
-      reloadCaptchaBtn.addEventListener('click', loadCaptcha);
-    }
-
-    const switchBtn = overlay.querySelector('#switch-mode-btn');
-    if (switchBtn) {
-      switchBtn.addEventListener('click', () => {
-        mode = mode === 'login' ? 'register' : 'login';
-        errorMessage = '';
-        if (mode === 'register') loadCaptcha();
-        render();
+    const tokenInput = overlay.querySelector('#direct-token-input');
+    if (tokenInput) {
+      tokenInput.addEventListener('input', (e) => (directTokenInput = e.target.value));
+      tokenInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') loginWithDirectToken();
       });
     }
 
-    const submitBtn = overlay.querySelector('#auth-submit-btn');
-    if (submitBtn) {
-      submitBtn.addEventListener('click', () => {
-        if (mode === 'login') handleLogin();
-        else if (mode === 'register') handleRegister();
-        else if (mode === 'unlock') handleUnlock();
+    overlay.querySelector('#login-token-btn')?.addEventListener('click', loginWithDirectToken);
+
+    const pwInput = overlay.querySelector('#auth-password');
+    if (pwInput) {
+      pwInput.addEventListener('input', (e) => (password = e.target.value));
+      pwInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') handleUnlock();
       });
     }
+
+    overlay.querySelector('#unlock-e2ee-btn')?.addEventListener('click', handleUnlock);
+
+    overlay.querySelector('#switch-to-token-btn')?.addEventListener('click', () => {
+      mode = 'token';
+      errorMessage = '';
+      render();
+    });
+
+    overlay.querySelector('#switch-to-oauth-btn')?.addEventListener('click', () => {
+      mode = 'oauth';
+      errorMessage = '';
+      render();
+    });
   };
 
   function escapeHtml(str) {
@@ -318,7 +327,6 @@ export function createAuthModal({ onSuccess }) {
     element: overlay,
     setMode: (m) => {
       mode = m;
-      if (m === 'register') loadCaptcha();
       render();
     },
   };
