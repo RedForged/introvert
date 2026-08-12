@@ -38,8 +38,5 @@
     "iOS": {
       "developmentTeam": ""
     }
-  },
-  "plugins": {
-    "notification": {}
   }
 }
