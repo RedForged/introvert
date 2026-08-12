@@ -1,6 +1,4 @@
-// Introvert REST API Client for Extrovert
-
-import { config } from './config.js';
+import { config, OFFICIAL_CLIENT_ID, OFFICIAL_SERVER_URL } from './config.js';
 
 class ApiClient {
   async request(path, options = {}) {
@@ -72,8 +70,8 @@ class ApiClient {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        name: 'Introvert Client',
-        redirect_uris: ['http://localhost:1420/oauth/callback', 'urn:ietf:wg:oauth:2.0:oob'],
+        name: 'Introvert',
+        redirect_uris: ['urn:ietf:wg:oauth:2.0:oob', 'http://localhost:1420/oauth/callback', 'introvert://oauth/callback'],
         scopes: 'openid profile read write follow media.write notifications read:direct write:direct',
         website: 'https://github.com/RedForged/introvert',
       }),
@@ -92,14 +90,20 @@ class ApiClient {
     await config.setServerUrl(serverUrl);
     const base = config.serverUrl;
 
-    let clientId, clientSecret;
+    let clientId = OFFICIAL_CLIENT_ID;
+    let clientSecret = null;
+
     if (preconfiguredApp && preconfiguredApp.clientId) {
       clientId = preconfiguredApp.clientId;
       clientSecret = preconfiguredApp.clientSecret || null;
-    } else {
-      const app = await this.registerApp(base);
-      clientId = app.client_id;
-      clientSecret = app.client_secret;
+    } else if (base !== OFFICIAL_SERVER_URL && !base.includes('extrovert.redforged.eu')) {
+      try {
+        const app = await this.registerApp(base);
+        clientId = app.client_id;
+        clientSecret = app.client_secret;
+      } catch (err) {
+        console.warn('Auto-register app failed, falling back to official client ID', err);
+      }
     }
     const redirectUri = 'urn:ietf:wg:oauth:2.0:oob';
     const scopes = 'openid profile read write follow media.write notifications read:direct write:direct';

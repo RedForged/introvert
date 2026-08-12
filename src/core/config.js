@@ -47,7 +47,9 @@ export const storage = {
   }
 };
 
-const DEFAULT_SERVER_URL = 'https://extrovert.redforged.eu';
+export const OFFICIAL_SERVER_URL = 'https://extrovert.redforged.eu';
+export const OFFICIAL_CLIENT_ID = '12d18d677546f877e7e1ae4c4503679494ff22296698f7ba';
+const DEFAULT_SERVER_URL = OFFICIAL_SERVER_URL;
 
 class ConfigManager {
   constructor() {
