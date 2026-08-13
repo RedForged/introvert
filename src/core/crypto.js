@@ -340,6 +340,21 @@ class CryptoEngine {
     }
   }
 
+  async createAndUploadBackup(password, username) {
+    const pass = String(password || '').trim();
+    if (!pass) throw new Error('Password is required');
+    await this.initOlm();
+    const user = (username || config.currentUser?.username || '').trim();
+    const k = await this.deriveKek(pass, user);
+    this.kek = k;
+    if (!this.account) {
+      await this.ensureReady();
+    }
+    const encBackup = await this.encryptWithKek(this.account.pickle(PICKLE_KEY), this.kek);
+    await api.publishPrekeys({ backup: encBackup });
+    return true;
+  }
+
   async unlockWithPassword(password, username) {
     return this.restoreFromBackup(password, username);
   }
