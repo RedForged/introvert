@@ -1,7 +1,6 @@
-// Introvert Application Main Entry Point
-
-import { initAppStores, authStore, chatStore, roomStore, callStore, notificationStore } from './core/state.js';
+import { initAppStores, authStore, chatStore, roomStore, callStore, notificationStore, showToast } from './core/state.js';
 import { config } from './core/config.js';
+import { signaling } from './core/signaling.js';
 import { createNavigation } from './ui/components/Navigation.js';
 import { createChatList } from './ui/components/ChatList.js';
 import { createChatView } from './ui/components/ChatView.js';
@@ -159,6 +158,27 @@ async function bootstrap() {
     },
   });
 
+  const performLogout = async () => {
+    try {
+      signaling.disconnect();
+    } catch (e) {}
+    await config.logout();
+    authStore.set({ isAuthenticated: false, user: null, isE2eeReady: false });
+    chatStore.set({ activeConversation: null, messages: {}, conversations: [] });
+    roomStore.set({ activeRoom: null, activeChannel: null, rooms: [] });
+    callStore.set({ callState: 'idle' });
+    showToast('info', 'Logged out successfully');
+
+    if (authModalInstance) {
+      authModalInstance.destroy();
+    }
+    authModalInstance = createAuthModal({
+      onSuccess: () => {
+        window.location.reload();
+      },
+    });
+  };
+
   const nav = createNavigation({
     onTabChange: (tab) => {
       activeTab = tab;
@@ -166,7 +186,7 @@ async function bootstrap() {
     },
     onOpenProfile: (user) => {
       if (!user) return;
-      createProfileModal({ user });
+      createProfileModal({ user, onLogout: performLogout });
     },
     onOpenSettings: () => {
       createSettingsModal({
@@ -177,9 +197,10 @@ async function bootstrap() {
             },
           });
         },
-        onLogout: () => {},
+        onLogout: performLogout,
       });
     },
+    onLogout: performLogout,
   });
 
   const callOverlay = createCallOverlay();

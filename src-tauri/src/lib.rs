@@ -1,6 +1,12 @@
 use std::fs;
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::PathBuf;
-use tauri::Manager;
+use std::sync::Mutex;
+use std::thread;
+use tauri::{Emitter, Manager};
+
+static PENDING_OAUTH_CODE: Mutex<Option<String>> = Mutex::new(None);
 
 fn get_storage_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
     let app_dir = app_handle
@@ -60,6 +66,64 @@ fn get_platform_info() -> serde_json::Value {
     })
 }
 
+#[tauri::command]
+fn get_oauth_code() -> Option<String> {
+    let mut lock = PENDING_OAUTH_CODE.lock().unwrap();
+    lock.take()
+}
+
+fn start_oauth_listener(app_handle: tauri::AppHandle) {
+    thread::spawn(move || {
+        let listener = match TcpListener::bind("127.0.0.1:1420") {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("[OAuth Server] Could not bind to 127.0.0.1:1420 (port in use or dev mode): {}", e);
+                return;
+            }
+        };
+
+        for stream in listener.incoming() {
+            if let Ok(mut stream) = stream {
+                let mut buffer = [0u8; 4096];
+                if let Ok(n) = stream.read(&mut buffer) {
+                    let req_str = String::from_utf8_lossy(&buffer[..n]);
+                    if let Some(line) = req_str.lines().next() {
+                        if line.contains("GET /oauth/callback") || line.contains("code=") {
+                            if let Some(code_idx) = req_str.find("code=") {
+                                let after = &req_str[code_idx + 5..];
+                                let code: String = after
+                                    .chars()
+                                    .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '-' || *c == '.')
+                                    .collect();
+
+                                if !code.is_empty() {
+                                    {
+                                        let mut lock = PENDING_OAUTH_CODE.lock().unwrap();
+                                        *lock = Some(code.clone());
+                                    }
+                                    let _ = app_handle.emit("oauth_code", &code);
+                                }
+                            }
+
+                            let body = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Introvert - Authorized</title><style>body{background:#0c0e12;color:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center}.card{background:#151821;border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:32px;text-align:center;max-width:380px;box-shadow:0 10px 30px rgba(0,0,0,0.5)}h2{margin:0 0 8px;font-size:20px;color:#38bdf8}p{font-size:13px;color:#94a3b8;margin:0 0 16px;line-height:1.5}</style></head><body><div class='card'><h2>Authorization Successful</h2><p>You can close this window and return to Introvert. The app will log you in automatically.</p></div><script>window.setTimeout(function(){ window.close(); }, 1200);</script></body></html>";
+                            let response = format!(
+                                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                                body.len(),
+                                body
+                            );
+                            let _ = stream.write_all(response.as_bytes());
+                            let _ = stream.flush();
+                        } else {
+                            let response = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                            let _ = stream.write_all(response.as_bytes());
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -67,11 +131,16 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            start_oauth_listener(app.handle().clone());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             storage_get,
             storage_set,
             storage_delete,
-            get_platform_info
+            get_platform_info,
+            get_oauth_code
         ])
         .run(tauri::generate_context!())
         .expect("error while running introvert tauri application");

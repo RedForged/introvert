@@ -3,7 +3,7 @@
 import { authStore, chatStore, callStore, notificationStore } from '../../core/state.js';
 import { config } from '../../core/config.js';
 
-export function createNavigation({ onTabChange, onOpenProfile, onOpenSettings }) {
+export function createNavigation({ onTabChange, onOpenProfile, onOpenSettings, onLogout }) {
   const nav = document.createElement('nav');
   nav.className = 'nav-rail';
 
@@ -73,6 +73,14 @@ export function createNavigation({ onTabChange, onOpenProfile, onOpenSettings })
         </svg>
       </button>
 
+      <button class="nav-btn" id="nav-logout-btn" title="Log Out" style="color:var(--text-muted);">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+          <polyline points="16 17 21 12 16 7"></polyline>
+          <line x1="21" y1="12" x2="9" y2="12"></line>
+        </svg>
+      </button>
+
       <div class="nav-divider"></div>
 
       <div class="nav-user-avatar" id="nav-profile-trigger" title="${user ? user.display_name || user.username : 'Profile'}">
@@ -86,7 +94,7 @@ export function createNavigation({ onTabChange, onOpenProfile, onOpenSettings })
     `;
 
     // Event handlers
-    nav.querySelectorAll('.nav-btn').forEach((btn) => {
+    nav.querySelectorAll('.nav-btn[data-tab]').forEach((btn) => {
       btn.addEventListener('click', () => {
         const tab = btn.getAttribute('data-tab');
         if (tab === 'settings') {
@@ -97,6 +105,10 @@ export function createNavigation({ onTabChange, onOpenProfile, onOpenSettings })
         render();
         if (onTabChange) onTabChange(tab);
       });
+    });
+
+    nav.querySelector('#nav-logout-btn')?.addEventListener('click', () => {
+      if (onLogout) onLogout();
     });
 
     const profileTrigger = nav.querySelector('#nav-profile-trigger');

@@ -6,7 +6,7 @@ import { config } from '../../core/config.js';
 import { api } from '../../core/api.js';
 import { webrtc } from '../../core/webrtc.js';
 
-export function createProfileModal({ user, onClose, onStartChat }) {
+export function createProfileModal({ user, onClose, onStartChat, onLogout }) {
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
 
@@ -116,12 +116,22 @@ export function createProfileModal({ user, onClose, onStartChat }) {
                 </div>
               `
                   : `
-                <button class="btn-pill" id="edit-profile-btn" style="width:100%; justify-content:center; height:38px; margin-top:8px;">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
-                  </svg>
-                  <span>Edit Profile</span>
-                </button>
+                <div style="display:flex; gap:8px; width:100%; margin-top:8px;">
+                  <button class="btn-pill" id="edit-profile-btn" style="flex:1; justify-content:center; height:38px;">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+                    </svg>
+                    <span>Edit Profile</span>
+                  </button>
+                  <button class="btn-pill danger" id="profile-logout-btn" style="height:38px; padding:0 14px;" title="Log Out">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                      <polyline points="16 17 21 12 16 7"></polyline>
+                      <line x1="21" y1="12" x2="9" y2="12"></line>
+                    </svg>
+                    <span>Log Out</span>
+                  </button>
+                </div>
               `
               }
             </div>
@@ -179,6 +189,11 @@ export function createProfileModal({ user, onClose, onStartChat }) {
       overlay.querySelector('#edit-profile-btn')?.addEventListener('click', () => {
         isEditing = true;
         render();
+      });
+
+      overlay.querySelector('#profile-logout-btn')?.addEventListener('click', () => {
+        overlay.remove();
+        if (onLogout) onLogout();
       });
     }
 

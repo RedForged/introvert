@@ -20,6 +20,37 @@ export function createAuthModal({ onSuccess }) {
   let errorMessage = '';
 
   let broadcastChannel = null;
+  let tauriPollInterval = null;
+  let unlistenTauriEvent = null;
+
+  const startTauriPolling = async () => {
+    try {
+      if (window.__TAURI_INTERNALS__ || window.__TAURI__) {
+        const { listen } = await import('@tauri-apps/api/event');
+        unlistenTauriEvent = await listen('oauth_code', (event) => {
+          if (event.payload && mode === 'oauth-code') {
+            authCodeInput = event.payload;
+            completeOAuthFlow(authCodeInput);
+          }
+        });
+      }
+    } catch (e) {}
+
+    if (tauriPollInterval) clearInterval(tauriPollInterval);
+    tauriPollInterval = setInterval(async () => {
+      if (mode !== 'oauth-code') return;
+      try {
+        if (window.__TAURI_INTERNALS__ || window.__TAURI__) {
+          const { invoke } = await import('@tauri-apps/api/core');
+          const code = await invoke('get_oauth_code');
+          if (code) {
+            authCodeInput = code;
+            completeOAuthFlow(code);
+          }
+        }
+      } catch (e) {}
+    }, 400);
+  };
 
   try {
     broadcastChannel = new BroadcastChannel('introvert_oauth');
@@ -71,6 +102,7 @@ export function createAuthModal({ onSuccess }) {
       isLoading = false;
       render();
 
+      startTauriPolling();
       await openExternalUrl(authUrl);
     } catch (err) {
       errorMessage = err.message || 'Failed to initialize OAuth connection to server.';
@@ -150,6 +182,14 @@ export function createAuthModal({ onSuccess }) {
     if (broadcastChannel) {
       broadcastChannel.close();
       broadcastChannel = null;
+    }
+    if (tauriPollInterval) {
+      clearInterval(tauriPollInterval);
+      tauriPollInterval = null;
+    }
+    if (unlistenTauriEvent) {
+      unlistenTauriEvent();
+      unlistenTauriEvent = null;
     }
   };
 
