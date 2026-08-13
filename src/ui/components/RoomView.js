@@ -133,8 +133,52 @@ export function createRoomView({ onBack, onOpenProfile, onCreateChannel }) {
     }
   };
 
+  let renderedKey = null;
+
+  const renderRoomMessagesOnly = () => {
+    const stream = container.querySelector('#room-message-stream');
+    if (!stream) return;
+
+    stream.innerHTML = messages.length === 0
+      ? `<div style="margin:auto; text-align:center; color:var(--text-faint);">
+          <p style="font-size:14px; margin-bottom:4px;">🔒 Megolm Group Encryption Active</p>
+          <p style="font-size:12px;">Messages in this room are end-to-end encrypted with Megolm group ratchets.</p>
+        </div>`
+      : messages
+          .map((m) => {
+            const isOwn = m.user_id === config.currentUser?.id;
+            const time = new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const avatarUrl = config.getAvatarUrl(m.avatar);
+            const initial = (m.display_name || m.username || '?')[0].toUpperCase();
+
+            return `
+              <div class="message-bubble-group ${isOwn ? 'own' : ''}">
+                <div class="message-avatar">
+                  ${
+                    avatarUrl
+                      ? `<img src="${avatarUrl}" alt="Avatar" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" />
+                         <div class="avatar-fallback" style="display:none;">${initial}</div>`
+                      : `<div class="avatar-fallback">${initial}</div>`
+                  }
+                </div>
+                <div class="message-content-wrap">
+                  <div class="message-author">
+                    <span>${escapeHtml(m.display_name || m.username || 'User')}</span>
+                    <span class="message-time">${time}</span>
+                  </div>
+                  <div class="message-bubble">
+                    <p>${escapeHtml(m.body)}</p>
+                  </div>
+                </div>
+              </div>
+            `;
+          })
+          .join('');
+  };
+
   const render = () => {
     if (!activeRoom) {
+      renderedKey = null;
       container.innerHTML = `
         <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; color:var(--text-faint); gap:12px;">
           <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -148,6 +192,14 @@ export function createRoomView({ onBack, onOpenProfile, onCreateChannel }) {
       `;
       return;
     }
+
+    const currentKey = `${currentRoomId}_${activeChannel?.id}_${showMembersDrawer}`;
+    if (renderedKey === currentKey && container.querySelector('#room-message-stream')) {
+      renderRoomMessagesOnly();
+      return;
+    }
+
+    renderedKey = currentKey;
 
     const channels = activeRoom.channels || [];
     const textChannels = channels.filter((c) => c.type === 'text' || !c.type);
@@ -260,13 +312,13 @@ export function createRoomView({ onBack, onOpenProfile, onCreateChannel }) {
                   <p style="font-size:13px; color:var(--text-muted);">WebRTC Peer-to-Peer Spatial Voice Channel</p>
                 </div>
 
-                <div>
+                <div style="display:flex; gap:12px;">
                   ${
                     isInThisVoiceChannel
-                      ? `<button class="btn-pill danger" id="leave-voice-btn" style="height:44px; padding:0 24px; font-size:14px;">
-                          Disconnect Voice
+                      ? `<button class="btn-pill danger" id="leave-voice-btn" style="height:36px; padding:0 16px;">
+                          Leave Voice Channel
                         </button>`
-                      : `<button class="btn-pill success" id="join-voice-btn" style="height:44px; padding:0 24px; font-size:14px;">
+                      : `<button class="btn-pill primary" id="join-voice-btn" style="height:36px; padding:0 16px;">
                           Join Voice Channel
                         </button>`
                   }
@@ -275,45 +327,7 @@ export function createRoomView({ onBack, onOpenProfile, onCreateChannel }) {
             `
               : `
               <!-- Text Channel Messages -->
-              <div class="message-stream" id="room-message-stream">
-                ${
-                  messages.length === 0
-                    ? `<div style="margin:auto; text-align:center; color:var(--text-faint);">
-                        <p style="font-size:14px; margin-bottom:4px;">🔒 Megolm Group Encryption Active</p>
-                        <p style="font-size:12px;">Messages in this room are end-to-end encrypted with Megolm group ratchets.</p>
-                      </div>`
-                    : messages
-                        .map((m) => {
-                          const isOwn = m.user_id === config.currentUser?.id;
-                          const time = new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                          const avatarUrl = config.getAvatarUrl(m.avatar);
-                          const initial = (m.display_name || m.username || '?')[0].toUpperCase();
-
-                          return `
-                            <div class="message-bubble-group ${isOwn ? 'own' : ''}">
-                              <div class="message-avatar">
-                                ${
-                                  avatarUrl
-                                    ? `<img src="${avatarUrl}" alt="Avatar" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" />
-                                       <div class="avatar-fallback" style="display:none;">${initial}</div>`
-                                    : `<div class="avatar-fallback">${initial}</div>`
-                                }
-                              </div>
-                              <div class="message-content-wrap">
-                                <div class="message-author">
-                                  <span>${escapeHtml(m.display_name || m.username || 'User')}</span>
-                                  <span class="message-time">${time}</span>
-                                </div>
-                                <div class="message-bubble">
-                                  <p>${escapeHtml(m.body)}</p>
-                                </div>
-                              </div>
-                            </div>
-                          `;
-                        })
-                        .join('')
-                }
-              </div>
+              <div class="message-stream" id="room-message-stream"></div>
 
               <!-- Text Channel Composer -->
               <div class="composer-container">

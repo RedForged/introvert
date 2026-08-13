@@ -155,8 +155,88 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
     }
   };
 
+  let renderedUsername = null;
+
+  const renderMessagesOnly = () => {
+    const stream = container.querySelector('#message-stream');
+    if (!stream) return;
+
+    const initial = (activePeer?.display_name || activePeer?.username || '?')[0].toUpperCase();
+    const avatarUrl = config.getAvatarUrl(activePeer?.avatar);
+
+    stream.innerHTML = messages.length === 0
+      ? `<div style="margin:auto; text-align:center; color:var(--text-faint);">
+          <p style="font-size:14px; margin-bottom:4px;">🔒 End-to-End Encrypted</p>
+          <p style="font-size:12px;">Messages in this direct conversation are encrypted with Signal-style Double Ratchet Olm keys.</p>
+        </div>`
+      : messages
+          .map((m) => {
+            const senderId = String(m.from_id || m.user_id || m.sender_id || '');
+            const currentUserId = String(config.currentUser?.id || '');
+            const isOwn = m.is_own !== undefined ? m.is_own : (senderId === currentUserId);
+            const time = new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const senderAvatar = isOwn
+              ? config.getAvatarUrl(config.currentUser?.avatar)
+              : avatarUrl;
+            const senderInitial = isOwn
+              ? (config.currentUser?.display_name || config.currentUser?.username || 'Y')[0].toUpperCase()
+              : initial;
+
+            const isSticker = m.body && m.body.startsWith('/uploads/stickers/');
+            const isMedia = m.media_path;
+            const isDecryptFailed = m.body && typeof m.body === 'string' && m.body.startsWith('[Unable to decrypt');
+
+            return `
+              <div class="message-bubble-group ${isOwn ? 'own' : ''}">
+                <div class="message-avatar">
+                  ${
+                    senderAvatar
+                      ? `<img src="${senderAvatar}" alt="Avatar" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" />
+                         <div class="avatar-fallback" style="display:none;">${senderInitial}</div>`
+                      : `<div class="avatar-fallback">${senderInitial}</div>`
+                  }
+                </div>
+                <div class="message-content-wrap">
+                  <div class="message-author">
+                    <span>${isOwn ? 'You' : activePeer.display_name || activePeer.username}</span>
+                    <span class="message-time">${time}</span>
+                  </div>
+                  <div class="message-bubble ${isDecryptFailed ? 'decrypt-failed-bubble' : ''}">
+                    ${
+                      isSticker
+                        ? `<img src="${config.getApiUrl(m.body)}" class="message-sticker" alt="Sticker" />`
+                        : isMedia
+                        ? `<img src="${config.getApiUrl(m.media_path)}" class="message-media" alt="Media" />
+                           ${m.body ? `<p style="margin-top:4px;">${escapeHtml(m.body)}</p>` : ''}`
+                        : isDecryptFailed
+                        ? `<div style="display:flex; align-items:center; flex-wrap:wrap; gap:6px; font-size:12.5px; color:var(--text-faint);">
+                            <span>🔒 Encrypted for previous session</span>
+                            <button class="btn-pill restore-trigger-btn" style="height:22px; padding:0 8px; font-size:11px; background:var(--bg-glass); border:1px solid var(--border); cursor:pointer;">Restore Backup</button>
+                           </div>`
+                        : `<p>${escapeHtml(m.body)}</p>`
+                    }
+                  </div>
+                </div>
+              </div>
+            `;
+          })
+          .join('');
+
+    stream.querySelectorAll('.restore-trigger-btn').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        createRestoreBackupModal({
+          onSuccess: () => {
+            if (currentUsername) loadConversation(currentUsername);
+          },
+        });
+      });
+    });
+  };
+
   const render = () => {
     if (!currentUsername || !activePeer) {
+      renderedUsername = null;
       container.innerHTML = `
         <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; color:var(--text-faint); gap:12px;">
           <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -173,6 +253,22 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
     const inCall = inCallUsers.has(currentUsername) || activePeer.in_call;
     const avatarUrl = config.getAvatarUrl(activePeer.avatar);
     const initial = (activePeer.display_name || activePeer.username || '?')[0].toUpperCase();
+
+    // If already rendered this user's conversation, just update stream and status
+    if (renderedUsername === currentUsername && container.querySelector('#message-stream')) {
+      const statusEl = container.querySelector('.stage-header-status');
+      if (statusEl) {
+        statusEl.textContent = `${inCall ? 'In another call' : isOnline ? 'Online' : 'Offline'} • E2EE Olm`;
+      }
+      const dot = container.querySelector('.stage-header-info .presence-dot');
+      if (dot) {
+        dot.className = `presence-dot ${inCall ? 'in-call' : isOnline ? 'online' : ''}`;
+      }
+      renderMessagesOnly();
+      return;
+    }
+
+    renderedUsername = currentUsername;
 
     container.innerHTML = `
       <div class="stage-header">
@@ -230,67 +326,7 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
         </div>
       </div>
 
-      <div class="message-stream" id="message-stream">
-        ${
-          messages.length === 0
-            ? `<div style="margin:auto; text-align:center; color:var(--text-faint);">
-                <p style="font-size:14px; margin-bottom:4px;">🔒 End-to-End Encrypted</p>
-                <p style="font-size:12px;">Messages in this direct conversation are encrypted with Signal-style Double Ratchet Olm keys.</p>
-              </div>`
-            : messages
-                .map((m) => {
-                  const senderId = String(m.from_id || m.user_id || m.sender_id || '');
-                  const currentUserId = String(config.currentUser?.id || '');
-                  const isOwn = m.is_own !== undefined ? m.is_own : (senderId === currentUserId);
-                  const time = new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                  const senderAvatar = isOwn
-                    ? config.getAvatarUrl(config.currentUser?.avatar)
-                    : avatarUrl;
-                  const senderInitial = isOwn
-                    ? (config.currentUser?.display_name || config.currentUser?.username || 'Y')[0].toUpperCase()
-                    : initial;
-
-                  const isSticker = m.body && m.body.startsWith('/uploads/stickers/');
-                  const isMedia = m.media_path;
-                  const isDecryptFailed = m.body && typeof m.body === 'string' && m.body.startsWith('[Unable to decrypt');
-
-                  return `
-                    <div class="message-bubble-group ${isOwn ? 'own' : ''}">
-                      <div class="message-avatar">
-                        ${
-                          senderAvatar
-                            ? `<img src="${senderAvatar}" alt="Avatar" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" />
-                               <div class="avatar-fallback" style="display:none;">${senderInitial}</div>`
-                            : `<div class="avatar-fallback">${senderInitial}</div>`
-                        }
-                      </div>
-                      <div class="message-content-wrap">
-                        <div class="message-author">
-                          <span>${isOwn ? 'You' : activePeer.display_name || activePeer.username}</span>
-                          <span class="message-time">${time}</span>
-                        </div>
-                        <div class="message-bubble ${isDecryptFailed ? 'decrypt-failed-bubble' : ''}">
-                          ${
-                            isSticker
-                              ? `<img src="${config.getApiUrl(m.body)}" class="message-sticker" alt="Sticker" />`
-                              : isMedia
-                              ? `<img src="${config.getApiUrl(m.media_path)}" class="message-media" alt="Media" />
-                                 ${m.body ? `<p style="margin-top:4px;">${escapeHtml(m.body)}</p>` : ''}`
-                              : isDecryptFailed
-                              ? `<div style="display:flex; align-items:center; flex-wrap:wrap; gap:6px; font-size:12.5px; color:var(--text-faint);">
-                                  <span>🔒 Encrypted for previous session</span>
-                                  <button class="btn-pill restore-trigger-btn" style="height:22px; padding:0 8px; font-size:11px; background:var(--bg-glass); border:1px solid var(--border); cursor:pointer;">Restore Backup</button>
-                                 </div>`
-                              : `<p>${escapeHtml(m.body)}</p>`
-                          }
-                        </div>
-                      </div>
-                    </div>
-                  `;
-                })
-                .join('')
-        }
-      </div>
+      <div class="message-stream" id="message-stream"></div>
 
       <div class="composer-container">
         <div class="composer-box">
@@ -315,7 +351,7 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
       </div>
     `;
 
-    // Attach Handlers
+    renderMessagesOnly();
     attachEventHandlers();
   };
 
@@ -429,9 +465,28 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
     if (state.activeConversation && state.activeConversation !== currentUsername) {
       loadConversation(state.activeConversation);
     } else if (state.activeConversation && state.messages[state.activeConversation]) {
-      messages = state.messages[state.activeConversation];
-      render();
-      scrollToBottom();
+      const newMsgs = state.messages[state.activeConversation];
+      if (newMsgs !== messages) {
+        messages = newMsgs;
+        renderMessagesOnly();
+        scrollToBottom();
+      }
+    }
+  });
+
+  presenceStore.subscribe(() => {
+    if (currentUsername && renderedUsername === currentUsername) {
+      const { onlineUsers, inCallUsers } = presenceStore.get();
+      const isOnline = onlineUsers.has(currentUsername) || activePeer?.online;
+      const inCall = inCallUsers.has(currentUsername) || activePeer?.in_call;
+      const statusEl = container.querySelector('.stage-header-status');
+      if (statusEl) {
+        statusEl.textContent = `${inCall ? 'In another call' : isOnline ? 'Online' : 'Offline'} • E2EE Olm`;
+      }
+      const dot = container.querySelector('.stage-header-info .presence-dot');
+      if (dot) {
+        dot.className = `presence-dot ${inCall ? 'in-call' : isOnline ? 'online' : ''}`;
+      }
     }
   });
 
