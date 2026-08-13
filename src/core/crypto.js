@@ -2,7 +2,7 @@
 // Compatible with Extrovert Double-Ratchet DMs, Megolm Rooms & Additional Security
 
 import { api } from './api.js';
-import { storage } from './config.js';
+import { config, storage } from './config.js';
 
 const DB_NAME = 'introvert-e2ee';
 const STORE_CRYPTO = 'cryptokeys';
