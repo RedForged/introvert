@@ -61,37 +61,85 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
         }
       }
 
-      // Decrypt messages
-      const decrypted = await Promise.all(
-        rawMessages.map(async (m) => {
-          const senderId = String(m.from_id || m.user_id || m.sender_id || '');
-          const isOwn = senderId === currentUserId || m.is_own === true;
-          const otherIdStr = String(activePeer.id || (isOwn ? m.to_id : m.from_id) || username);
-          const curveKey = activePeer.curve25519_key || activePeer.sender_curve || m.sender_curve;
-
-          let isOlm = m.proto === 'olm';
-          if (!isOlm && typeof m.body === 'string') {
-            const t = m.body.trim();
-            if (t.startsWith('{') && (t.includes('"t":') || t.includes('"b":'))) {
-              isOlm = true;
-            }
-          }
-
-          if (isOlm) {
-            try {
-              const plain = await cryptoEngine.decryptDm(m, isOwn, otherIdStr, curveKey);
-              const failed = plain.startsWith('[Unable to decrypt');
-              return { ...m, body: plain, is_own: isOwn, decrypted: !failed };
-            } catch (err) {
-              return { ...m, body: '[Unable to decrypt — encrypted for previous session]', is_own: isOwn, decrypted: false };
-            }
-          }
-          return { ...m, is_own: isOwn, decrypted: true };
-        })
+      // Sort chronological FIRST, then decrypt strictly in order: Olm's double
+      // ratchet is stateful, so messages must be decrypted oldest → newest one
+      // at a time (the crypto engine also serializes per peer).
+      const ordered = [...rawMessages].sort(
+        (a, b) => (a.created_at - b.created_at) || (Number(a.id) - Number(b.id))
       );
 
-      // Sort chronological
-      decrypted.sort((a, b) => a.created_at - b.created_at || a.id - b.id);
+      // Plaintext cache: once a message has been decrypted its message key is
+      // consumed — re-decrypting it after the session ratcheted past it fails.
+      // Persist every decrypted plaintext locally (like Extrovert does) so
+      // re-opening a chat never has to re-run crypto for old messages. The
+      // cached record keeps the original ciphertext so an EDITED message
+      // (same id, new body) is re-decrypted instead of showing stale text.
+      const cacheKey = String(activePeer.id || username);
+      const cachedMap = new Map();
+      try {
+        const cachedRecs = await cryptoEngine.secureLoadMessages(cacheKey);
+        for (const r of cachedRecs || []) {
+          if (r && r.id !== undefined && r.plaintext !== undefined) {
+            cachedMap.set(String(r.id), r);
+          }
+        }
+      } catch (e) {}
+
+      const decrypted = [];
+      for (const m of ordered) {
+        const senderId = String(m.from_id || m.user_id || m.sender_id || '');
+        const isOwn = senderId === currentUserId || m.is_own === true;
+        const otherIdStr = String(activePeer.id || (isOwn ? m.to_id : m.from_id) || username);
+        const curveKey = activePeer.curve25519_key || activePeer.sender_curve || m.sender_curve;
+
+        let isOlm = m.proto === 'olm';
+        if (!isOlm && typeof m.body === 'string') {
+          const t = m.body.trim();
+          if (t.startsWith('{') && (t.includes('"t":') || t.includes('"b":'))) {
+            isOlm = true;
+          }
+        }
+
+        if (isOlm) {
+          const cached = cachedMap.get(String(m.id));
+          if (cached && (cached.cipher === undefined || cached.cipher === m.body)) {
+            decrypted.push({ ...m, body: cached.plaintext, is_own: isOwn, decrypted: true });
+            continue;
+          }
+          try {
+            const plain = await cryptoEngine.decryptDm(m, isOwn, otherIdStr, curveKey);
+            const failed = typeof plain === 'string' && plain.startsWith('[Unable to decrypt');
+            if (!failed) {
+              cachedMap.set(String(m.id), { plaintext: plain, cipher: m.body });
+              cryptoEngine.securePersistMessage(otherIdStr, {
+                id: m.id,
+                from_id: isOwn ? currentUserId : senderId,
+                created_at: m.created_at,
+                edited_at: m.edited_at || null,
+                proto: 'olm',
+                plaintext: plain,
+                cipher: m.body,
+                own: isOwn,
+              }).catch(() => {});
+            }
+            decrypted.push({ ...m, body: plain, is_own: isOwn, decrypted: !failed });
+          } catch (err) {
+            decrypted.push({ ...m, body: '[Unable to decrypt — encrypted for previous session]', is_own: isOwn, decrypted: false });
+          }
+        } else {
+          decrypted.push({ ...m, is_own: isOwn, decrypted: true });
+        }
+      }
+
+      // Merge in any live messages that arrived while history was loading so
+      // this overwrite doesn't drop them.
+      const liveMsgs = chatStore.get().messages[username] || [];
+      for (const lm of liveMsgs) {
+        if (!decrypted.some((d) => String(d.id) === String(lm.id))) {
+          decrypted.push(lm);
+        }
+      }
+      decrypted.sort((a, b) => (a.created_at - b.created_at) || (Number(a.id) - Number(b.id)));
       messages = decrypted;
 
       // Update store

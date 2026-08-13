@@ -52,28 +52,35 @@ export function createRoomView({ onBack, onOpenProfile, onCreateChannel }) {
   const loadChannelMessages = async (channelId) => {
     if (!currentRoomId || !channelId) return;
     try {
-      const raw = await api.getChannelMessages(currentRoomId, channelId);
-      // Decrypt Megolm messages
-      const decrypted = await Promise.all(
-        raw.map(async (m) => {
-          if (m.proto === 'megolm') {
-            try {
-              const plain = await cryptoEngine.decryptRoomMessage(
-                currentRoomId,
-                m.user_id,
-                m.ciphertext || m.body,
-                m.group_session_id
-              );
-              return { ...m, body: plain, decrypted: true };
-            } catch (err) {
-              return { ...m, body: '🔒 [Megolm Decryption Pending]', decrypted: false };
-            }
-          }
-          return { ...m, decrypted: true };
-        })
+      const data = await api.getChannelMessages(currentRoomId, channelId);
+      const rawList = Array.isArray(data) ? data : (data.messages || []);
+      // Megolm message indices are sequential per group session: sort first,
+      // then decrypt strictly in order (the engine serializes per session too).
+      const ordered = [...rawList].sort(
+        (a, b) => (a.created_at - b.created_at) || (Number(a.id) - Number(b.id))
       );
-
-      decrypted.sort((a, b) => a.created_at - b.created_at || a.id - b.id);
+      const decrypted = [];
+      for (const m of ordered) {
+        if (m.proto === 'megolm') {
+          if (!(m.ciphertext || m.body) || !m.group_session_id) {
+            decrypted.push({ ...m, body: '🔒 [Megolm Decryption Pending]', decrypted: false });
+            continue;
+          }
+          try {
+            const plain = await cryptoEngine.decryptRoomMessage(
+              currentRoomId,
+              m.user_id,
+              m.ciphertext || m.body,
+              m.group_session_id
+            );
+            decrypted.push({ ...m, body: plain, decrypted: true });
+          } catch (err) {
+            decrypted.push({ ...m, body: '🔒 [Megolm Decryption Pending]', decrypted: false });
+          }
+        } else {
+          decrypted.push({ ...m, decrypted: true });
+        }
+      }
       messages = decrypted;
       render();
       scrollToBottom();
@@ -102,7 +109,7 @@ export function createRoomView({ onBack, onOpenProfile, onCreateChannel }) {
       const { ciphertext, group_session_id } = await cryptoEngine.encryptRoomMessage(currentRoomId, text);
 
       const res = await api.sendChannelMessage(currentRoomId, activeChannel.id, {
-        body: ciphertext,
+        ciphertext,
         proto: 'megolm',
         group_session_id,
       });

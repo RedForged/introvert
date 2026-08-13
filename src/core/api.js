@@ -420,8 +420,34 @@ class ApiClient {
     return res.data;
   }
 
-  async getPrekeysCount() {
-    const res = await this.request('/api/v1/conversations/prekeys/count');
+  async getPrekeysCount(deviceId) {
+    const qs = deviceId ? `?device_id=${encodeURIComponent(deviceId)}` : '';
+    const res = await this.request(`/api/v1/conversations/prekeys/count${qs}`);
+    return res.data;
+  }
+
+  async getDevices() {
+    const res = await this.request('/api/v1/conversations/devices');
+    return res.data;
+  }
+
+  async deleteDevice(deviceId) {
+    const res = await this.request(`/api/v1/conversations/devices/${encodeURIComponent(deviceId)}`, {
+      method: 'DELETE',
+    });
+    return res.data;
+  }
+
+  async uploadHistoryBackup(backupData) {
+    const res = await this.request('/api/v1/conversations/history/backup', {
+      method: 'POST',
+      body: JSON.stringify({ backup_data: backupData }),
+    });
+    return res.data;
+  }
+
+  async getHistoryBackup() {
+    const res = await this.request('/api/v1/conversations/history/backup');
     return res.data;
   }
 
@@ -549,12 +575,12 @@ class ApiClient {
     return res.data || [];
   }
 
-  async sendChannelMessage(roomId, channelId, { body, proto = 'megolm', group_session_id }) {
+  async sendChannelMessage(roomId, channelId, { ciphertext, proto = 'megolm', group_session_id }) {
     const res = await this.request(`/api/v1/rooms/${roomId}/channels/${channelId}/messages`, {
       method: 'POST',
       body: JSON.stringify({
-        body,
         proto,
+        ciphertext,
         group_session_id,
       }),
     });

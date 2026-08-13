@@ -157,10 +157,12 @@ export async function initAppStores() {
 
   signaling.on('new_dm', async (dmEvent) => {
     const fromUser = dmEvent.from_username;
-    // Decrypt live DM
+    // Decrypt live DM. The websocket payload carries `from_id` (not
+    // `sender_id`) — keying sessions by the sender's real id is what makes
+    // live decrypts hit the same session the history path uses.
     try {
-      const activeUser = config.currentUser;
-      const otherIdStr = String(dmEvent.message.sender_id || '');
+      await cryptoEngine.ensureReady();
+      const otherIdStr = String(dmEvent.message.from_id || dmEvent.message.sender_id || '');
       const plain = await cryptoEngine.decryptDm(
         dmEvent.message,
         false,
@@ -170,14 +172,30 @@ export async function initAppStores() {
 
       const newMsg = {
         id: dmEvent.message.id,
-        user_id: dmEvent.message.sender_id,
+        user_id: otherIdStr,
         body: plain,
         created_at: dmEvent.message.created_at || Date.now(),
         is_own: false,
         proto: 'olm',
       };
 
+      // Cache the plaintext so reopening the chat never re-runs crypto on an
+      // already-consumed message key.
+      if (typeof plain === 'string' && !plain.startsWith('[Unable to decrypt')) {
+        cryptoEngine.securePersistMessage(otherIdStr, {
+          id: dmEvent.message.id,
+          from_id: otherIdStr,
+          created_at: dmEvent.message.created_at || Date.now(),
+          edited_at: null,
+          proto: 'olm',
+          plaintext: plain,
+          cipher: dmEvent.message.body,
+          own: false,
+        }).catch(() => {});
+      }
+
       const msgs = chatStore.get().messages[fromUser] || [];
+      if (msgs.some((x) => String(x.id) === String(newMsg.id))) return;
       chatStore.set({
         messages: {
           ...chatStore.get().messages,
