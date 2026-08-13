@@ -1,9 +1,8 @@
-// Introvert Settings Modal Component
-
 import { authStore, showToast } from '../../core/state.js';
 import { config } from '../../core/config.js';
 import { cryptoEngine } from '../../core/crypto.js';
 import { signaling } from '../../core/signaling.js';
+import { createRestoreBackupModal } from './RestoreBackupModal.js';
 
 export function createSettingsModal({ onClose, onAddAccount, onLogout }) {
   const overlay = document.createElement('div');
@@ -203,8 +202,16 @@ export function createSettingsModal({ onClose, onAddAccount, onLogout }) {
                 <input type="text" class="form-input" value="${myIdKeys.ed25519}" readonly style="font-family:var(--font-mono); font-size:11px;" />
               </div>
 
-              <div style="margin-top:16px;">
-                <button class="btn-pill primary" id="replenish-prekeys-btn">Replenish One-Time Prekeys</button>
+              <div style="margin-top:14px; display:flex; gap:8px; flex-wrap:wrap;">
+                <button class="btn-pill primary" id="replenish-prekeys-btn">Replenish Prekeys</button>
+                <button class="btn-pill" id="settings-restore-backup-btn">Restore Backup with Password</button>
+              </div>
+
+              <div style="margin-top:14px; padding:12px; background:var(--bg-glass); border:1px solid var(--border); border-radius:var(--radius-sm);">
+                <span style="font-size:12px; font-weight:600; color:var(--text-main); display:block; margin-bottom:4px;">Server Key Backup</span>
+                <p style="font-size:11.5px; color:var(--text-muted); line-height:1.4; margin:0;">
+                  If you used Extrovert in a browser before, your original encryption keys are stored on the server encrypted with your account password. Restoring them allows you to decrypt older message history.
+                </p>
               </div>
             `
                 : currentTab === 'appearance'
@@ -325,6 +332,15 @@ export function createSettingsModal({ onClose, onAddAccount, onLogout }) {
       } catch (err) {
         showToast('danger', 'Replenish failed', err.message);
       }
+    });
+
+    // E2EE Restore backup
+    overlay.querySelector('#settings-restore-backup-btn')?.addEventListener('click', () => {
+      createRestoreBackupModal({
+        onSuccess: () => {
+          render();
+        },
+      });
     });
 
     // Appearance Theme switcher

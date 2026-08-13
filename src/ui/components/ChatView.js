@@ -1,10 +1,9 @@
-// Introvert Direct Chat View Component
-
 import { chatStore, authStore, presenceStore, showToast, refreshConversationsList } from '../../core/state.js';
 import { config } from '../../core/config.js';
 import { api } from '../../core/api.js';
 import { cryptoEngine } from '../../core/crypto.js';
 import { webrtc } from '../../core/webrtc.js';
+import { createRestoreBackupModal } from './RestoreBackupModal.js';
 
 export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
   const container = document.createElement('div');
@@ -50,12 +49,21 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
           const otherIdStr = String(activePeer.id || (isOwn ? m.to_id : m.from_id) || '');
           const curveKey = activePeer.curve25519_key || activePeer.sender_curve || m.sender_curve;
 
-          if (m.proto === 'olm') {
+          let isOlm = m.proto === 'olm';
+          if (!isOlm && typeof m.body === 'string') {
+            const t = m.body.trim();
+            if (t.startsWith('{') && (t.includes('"t":') || t.includes('"b":'))) {
+              isOlm = true;
+            }
+          }
+
+          if (isOlm) {
             try {
               const plain = await cryptoEngine.decryptDm(m, isOwn, otherIdStr, curveKey);
-              return { ...m, body: plain, is_own: isOwn, decrypted: true };
+              const failed = plain.startsWith('[Unable to decrypt');
+              return { ...m, body: plain, is_own: isOwn, decrypted: !failed };
             } catch (err) {
-              return { ...m, body: '🔒 [Decryption failed or message expired]', is_own: isOwn, decrypted: false };
+              return { ...m, body: '[Unable to decrypt — encrypted for previous session]', is_own: isOwn, decrypted: false };
             }
           }
           return { ...m, is_own: isOwn, decrypted: true };
@@ -244,6 +252,7 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
 
                   const isSticker = m.body && m.body.startsWith('/uploads/stickers/');
                   const isMedia = m.media_path;
+                  const isDecryptFailed = m.body && typeof m.body === 'string' && m.body.startsWith('[Unable to decrypt');
 
                   return `
                     <div class="message-bubble-group ${isOwn ? 'own' : ''}">
@@ -260,13 +269,18 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
                           <span>${isOwn ? 'You' : activePeer.display_name || activePeer.username}</span>
                           <span class="message-time">${time}</span>
                         </div>
-                        <div class="message-bubble">
+                        <div class="message-bubble ${isDecryptFailed ? 'decrypt-failed-bubble' : ''}">
                           ${
                             isSticker
                               ? `<img src="${config.getApiUrl(m.body)}" class="message-sticker" alt="Sticker" />`
                               : isMedia
                               ? `<img src="${config.getApiUrl(m.media_path)}" class="message-media" alt="Media" />
                                  ${m.body ? `<p style="margin-top:4px;">${escapeHtml(m.body)}</p>` : ''}`
+                              : isDecryptFailed
+                              ? `<div style="display:flex; align-items:center; flex-wrap:wrap; gap:6px; font-size:12.5px; color:var(--text-faint);">
+                                  <span>🔒 Encrypted for previous session</span>
+                                  <button class="btn-pill restore-trigger-btn" style="height:22px; padding:0 8px; font-size:11px; background:var(--bg-glass); border:1px solid var(--border); cursor:pointer;">Restore Backup</button>
+                                 </div>`
                               : `<p>${escapeHtml(m.body)}</p>`
                           }
                         </div>
@@ -390,6 +404,17 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
         }
       });
     }
+
+    container.querySelectorAll('.restore-trigger-btn').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        createRestoreBackupModal({
+          onSuccess: () => {
+            if (currentUsername) loadConversation(currentUsername);
+          },
+        });
+      });
+    });
   };
 
   function escapeHtml(str) {

@@ -310,43 +310,38 @@ class CryptoEngine {
     return true;
   }
 
-  async unlockWithPassword(password, username) {
+  async restoreFromBackup(password, username) {
     const pass = String(password || '').trim();
-    if (!pass) throw new Error('Password required');
+    if (!pass) throw new Error('Password is required');
     await this.initOlm();
-    const k = await this.deriveKek(pass, username);
+    const user = (username || config.currentUser?.username || '').trim();
+    const k = await this.deriveKek(pass, user);
     this.kek = k;
     await this.getOrCreateDeviceKey();
-    const acct = await this.loadAccountFromStorage();
-    if (acct) {
-      await this.loadSelfSessions();
-      return true;
+
+    const data = await api.getPrekeysBackup();
+    if (!data || !data.backup) {
+      throw new Error('No server key backup found for this account.');
     }
 
     try {
-      const data = await api.getPrekeysBackup();
-      if (data && data.backup) {
-        const pickle = await this.decryptWithKek(data.backup, this.kek);
-        this.account = new window.Olm.Account();
-        this.account.unpickle(PICKLE_KEY, pickle);
-        const keys = JSON.parse(this.account.identity_keys());
-        this.myIdKeys = { curve25519: keys.curve25519, ed25519: keys.ed25519 };
-      } else {
-        await this.createAndPublishAccount();
-        const encBackup = await this.encryptWithKek(this.account.pickle(PICKLE_KEY), this.kek);
-        await api.publishPrekeys({ backup: encBackup });
-      }
-    } catch (err) {
-      // If fetching backup fails or no backup, create fresh account
-      await this.createAndPublishAccount();
-      const encBackup = await this.encryptWithKek(this.account.pickle(PICKLE_KEY), this.kek);
-      await api.publishPrekeys({ backup: encBackup });
-    }
+      const pickle = await this.decryptWithKek(data.backup, this.kek);
+      this.account = new window.Olm.Account();
+      this.account.unpickle(PICKLE_KEY, pickle);
+      const keys = JSON.parse(this.account.identity_keys());
+      this.myIdKeys = { curve25519: keys.curve25519, ed25519: keys.ed25519 };
 
-    await this.maybeReplenishPrekeys();
-    await this.saveAccount();
-    await this.loadSelfSessions();
-    return true;
+      await this.saveAccount();
+      await this.loadSelfSessions();
+      await this.maybeReplenishPrekeys();
+      return true;
+    } catch (err) {
+      throw new Error('Incorrect password or key backup could not be decrypted.');
+    }
+  }
+
+  async unlockWithPassword(password, username) {
+    return this.restoreFromBackup(password, username);
   }
 
   // --- 1:1 Sessions (Double-Ratchet) ---
@@ -504,22 +499,52 @@ class CryptoEngine {
       return msg.body;
     }
 
-    if (msg.proto && msg.proto !== 'olm') {
+    let isJsonEnvelope = false;
+    let env = null;
+    if (typeof msg.body === 'object' && msg.body !== null && msg.body.t !== undefined) {
+      isJsonEnvelope = true;
+      env = msg.body;
+    } else if (typeof msg.body === 'string') {
+      const trimmed = msg.body.trim();
+      if (trimmed.startsWith('{') && (trimmed.includes('"t":') || trimmed.includes('"b":'))) {
+        try {
+          env = JSON.parse(trimmed);
+          if (env && env.t !== undefined && env.b) {
+            isJsonEnvelope = true;
+          }
+        } catch (e) {}
+      }
+    }
+
+    if (!isJsonEnvelope && msg.proto && msg.proto !== 'olm') {
       return msg.body;
     }
 
     if (isOwn) {
-      if (!msg.sender_ciphertext) {
+      const rawSelf = msg.sender_ciphertext || (isJsonEnvelope ? msg.body : null);
+      if (!rawSelf) {
         return typeof msg.body === 'string' ? msg.body : '';
       }
       try {
         await this.ensureSelfSessions();
-        const env = typeof msg.sender_ciphertext === 'string' ? JSON.parse(msg.sender_ciphertext) : msg.sender_ciphertext;
-        if (!env || env.t === undefined || !env.b) return msg.body;
+        let selfEnv = null;
+        if (typeof rawSelf === 'object' && rawSelf !== null) {
+          selfEnv = rawSelf;
+        } else if (typeof rawSelf === 'string') {
+          try {
+            selfEnv = JSON.parse(rawSelf);
+          } catch (e) {
+            return rawSelf;
+          }
+        }
+
+        if (!selfEnv || selfEnv.t === undefined || !selfEnv.b) {
+          return typeof msg.body === 'string' ? msg.body : '';
+        }
 
         if (this.selfInbound) {
           try {
-            return this.selfInbound.decrypt(env.t, env.b);
+            return this.selfInbound.decrypt(selfEnv.t, selfEnv.b);
           } catch (e) {}
         }
 
@@ -527,24 +552,16 @@ class CryptoEngine {
           try {
             const replay = new window.Olm.Session();
             replay.unpickle(PICKLE_KEY, this.selfInboundBaseline);
-            return replay.decrypt(env.t, env.b);
+            return replay.decrypt(selfEnv.t, selfEnv.b);
           } catch (e) {}
         }
-        return typeof msg.body === 'string' ? msg.body : '[Sent message]';
+        return '[Unable to decrypt — encrypted for previous session]';
       } catch (e) {
-        console.warn('Decryption of own message fallback', e);
-        return typeof msg.body === 'string' ? msg.body : '[Sent message]';
+        return '[Unable to decrypt — encrypted for previous session]';
       }
     }
 
     // Incoming message from peer
-    let env = null;
-    try {
-      env = typeof msg.body === 'string' ? JSON.parse(msg.body) : msg.body;
-    } catch (e) {
-      return typeof msg.body === 'string' ? msg.body : '';
-    }
-
     if (!env || env.t === undefined || !env.b) {
       return typeof msg.body === 'string' ? msg.body : '';
     }
@@ -566,7 +583,7 @@ class CryptoEngine {
       }
     }
 
-    // Non-PreKey message (t > 0): decrypt with baseline session
+    // Non-PreKey message (t > 0): decrypt with baseline session or active session
     if (otherIdStr) {
       const base = await this.loadSessionBaseline(otherIdStr);
       if (base) {
