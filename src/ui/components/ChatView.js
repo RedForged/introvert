@@ -231,7 +231,9 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
               </div>`
             : messages
                 .map((m) => {
-                  const isOwn = m.user_id === config.currentUser?.id;
+                  const senderId = String(m.from_id || m.user_id || m.sender_id || '');
+                  const currentUserId = String(config.currentUser?.id || '');
+                  const isOwn = m.is_own !== undefined ? m.is_own : (senderId === currentUserId);
                   const time = new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
                   const senderAvatar = isOwn
                     ? config.getAvatarUrl(config.currentUser?.avatar)

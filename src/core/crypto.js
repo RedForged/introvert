@@ -510,18 +510,30 @@ class CryptoEngine {
 
     if (isOwn) {
       if (!msg.sender_ciphertext) {
-        return msg.body;
+        return typeof msg.body === 'string' ? msg.body : '';
       }
       try {
         await this.ensureSelfSessions();
         const env = typeof msg.sender_ciphertext === 'string' ? JSON.parse(msg.sender_ciphertext) : msg.sender_ciphertext;
         if (!env || env.t === undefined || !env.b) return msg.body;
-        const replay = new window.Olm.Session();
-        replay.unpickle(PICKLE_KEY, this.selfInboundBaseline);
-        return replay.decrypt(env.t, env.b);
+
+        if (this.selfInbound) {
+          try {
+            return this.selfInbound.decrypt(env.t, env.b);
+          } catch (e) {}
+        }
+
+        if (this.selfInboundBaseline) {
+          try {
+            const replay = new window.Olm.Session();
+            replay.unpickle(PICKLE_KEY, this.selfInboundBaseline);
+            return replay.decrypt(env.t, env.b);
+          } catch (e) {}
+        }
+        return typeof msg.body === 'string' ? msg.body : '[Sent message]';
       } catch (e) {
         console.warn('Decryption of own message fallback', e);
-        return msg.body;
+        return typeof msg.body === 'string' ? msg.body : '[Sent message]';
       }
     }
 
@@ -530,45 +542,31 @@ class CryptoEngine {
     try {
       env = typeof msg.body === 'string' ? JSON.parse(msg.body) : msg.body;
     } catch (e) {
-      return msg.body;
+      return typeof msg.body === 'string' ? msg.body : '';
     }
 
     if (!env || env.t === undefined || !env.b) {
       return typeof msg.body === 'string' ? msg.body : '';
     }
 
-    let session = otherIdStr ? await this.loadSession(otherIdStr) : null;
-
     if (env.t === 0) {
       // PreKey message: instantiate inbound session
-      const newSession = new window.Olm.Session();
-      if (peerCurveKey) {
-        try {
-          newSession.create_inbound_from(this.account, peerCurveKey, env.b);
-        } catch (e) {
-          newSession.create_inbound(this.account, env.b);
-        }
-      } else {
-        newSession.create_inbound(this.account, env.b);
-      }
-      this.account.remove_one_time_keys(newSession);
-      if (otherIdStr) {
-        await this.saveSessionBaseline(otherIdStr, newSession);
-        await this.saveSession(otherIdStr, newSession);
-      }
-      await this.saveAccount();
-      return newSession.decrypt(env.t, env.b);
-    }
-
-    if (session) {
       try {
-        const plain = session.decrypt(env.t, env.b);
-        if (otherIdStr) await this.saveSession(otherIdStr, session);
-        return plain;
-      } catch (e) {}
+        const newSession = new window.Olm.Session();
+        newSession.create_inbound(this.account, env.b);
+        this.account.remove_one_time_keys(newSession);
+        if (otherIdStr) {
+          await this.saveSessionBaseline(otherIdStr, newSession);
+          await this.saveSession(otherIdStr, newSession);
+        }
+        await this.saveAccount();
+        return newSession.decrypt(env.t, env.b);
+      } catch (e) {
+        console.warn('PreKey inbound session creation error', e);
+      }
     }
 
-    // Fallback: try baseline replay
+    // Non-PreKey message (t > 0): decrypt with baseline session
     if (otherIdStr) {
       const base = await this.loadSessionBaseline(otherIdStr);
       if (base) {
@@ -578,9 +576,18 @@ class CryptoEngine {
           return replay.decrypt(env.t, env.b);
         } catch (e) {}
       }
+
+      const session = await this.loadSession(otherIdStr);
+      if (session) {
+        try {
+          const plain = session.decrypt(env.t, env.b);
+          await this.saveSession(otherIdStr, session);
+          return plain;
+        } catch (e) {}
+      }
     }
 
-    throw new Error('Unable to decrypt message (session ratchet state mismatch)');
+    return '[Unable to decrypt — encrypted for previous session]';
   }
 
   // --- Additional Security Mode: Local Storage & Receipt Acks ---
