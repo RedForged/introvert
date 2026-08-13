@@ -356,7 +356,25 @@ class ApiClient {
   async searchAccounts(query) {
     if (!query || !query.trim()) return [];
     const res = await this.request(`/api/v1/search?q=${encodeURIComponent(query.trim())}&type=accounts&limit=20`);
-    return res.data ? res.data.accounts || [] : [];
+    if (Array.isArray(res.data)) return res.data;
+    if (res.data && Array.isArray(res.data.accounts)) return res.data.accounts;
+    if (Array.isArray(res)) return res;
+    return [];
+  }
+
+  async lookupAccount(username) {
+    if (!username) return null;
+    try {
+      const res = await this.request(`/api/v1/accounts/lookup?acct=${encodeURIComponent(username)}`);
+      if (res.data) return res.data;
+      if (res.id || res.username) return res;
+    } catch (e) {}
+    try {
+      const accounts = await this.searchAccounts(username);
+      return accounts.find((a) => a.username.toLowerCase() === username.toLowerCase()) || null;
+    } catch (e) {
+      return null;
+    }
   }
 
   // --- Direct Messages (E2EE) ---

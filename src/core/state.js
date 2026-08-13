@@ -227,38 +227,53 @@ export async function bootstrapAuthenticatedData() {
 export async function refreshConversationsList() {
   try {
     const list = await api.getConversations();
-    // Decrypt previews
+    const currentUserId = String(config.currentUser?.id || '');
+
     const convs = await Promise.all(
-      list.map(async (c) => {
-        let preview = c.last_message ? c.last_message.body : '';
-        if (c.last_message && c.last_message.proto === 'olm') {
-          try {
-            const isOwn = c.last_message.user_id === config.currentUser?.id;
-            preview = await cryptoEngine.decryptDm(
-              c.last_message,
-              isOwn,
-              String(c.account.id),
-              c.curve25519_key
-            );
-          } catch (e) {
-            preview = '🔒 [Encrypted Message]';
+      (Array.isArray(list) ? list : []).map(async (c) => {
+        const peerId = String(c.id || (c.account && c.account.id) || '');
+        const username = c.username || (c.account && c.account.username) || '';
+        const displayName = c.display_name || (c.account && c.account.display_name) || username;
+        const avatar = c.avatar || (c.account && c.account.avatar);
+        const curveKey = c.sender_curve || c.curve25519_key || (c.account && c.account.curve25519_key);
+
+        let preview = '';
+        if (c.last_message) {
+          const isProtoOlm = c.last_proto === 'olm' || (c.last_message && typeof c.last_message === 'object' && c.last_message.proto === 'olm');
+          if (isProtoOlm) {
+            try {
+              const msgObj = typeof c.last_message === 'object' ? c.last_message : {
+                body: c.last_message,
+                sender_ciphertext: c.last_sender_ciphertext,
+                from_id: c.last_from,
+              };
+              const isOwn = String(c.last_from || msgObj.from_id || msgObj.user_id) === currentUserId;
+              preview = await cryptoEngine.decryptDm(msgObj, isOwn, peerId, curveKey);
+            } catch (e) {
+              preview = '🔒 [Encrypted Message]';
+            }
+          } else {
+            preview = typeof c.last_message === 'string' ? c.last_message : (c.last_message.body || '');
           }
         }
+
         return {
-          id: c.account.id,
-          username: c.account.username,
-          display_name: c.account.display_name,
-          avatar: c.account.avatar,
-          online: c.account.is_online || false,
-          in_call: c.account.in_call || false,
+          id: peerId,
+          username,
+          display_name: displayName,
+          avatar,
+          online: c.is_online || (c.account && c.account.is_online) || false,
+          in_call: c.in_call || (c.account && c.account.in_call) || false,
           last_message: preview,
-          last_message_ts: c.last_message ? c.last_message.created_at : null,
-          unread_count: c.unread_count || 0,
-          secure: c.secure || false,
+          last_message_ts: c.last_at || (c.last_message && c.last_message.created_at) || null,
+          unread_count: c.unread || c.unread_count || 0,
+          secure: c.security_active || c.secure || false,
         };
       })
     );
-    chatStore.set({ conversations: convs });
+
+    const validConvs = convs.filter((c) => c.username);
+    chatStore.set({ conversations: validConvs });
   } catch (e) {
     console.warn('Refresh conversations failed', e);
   }

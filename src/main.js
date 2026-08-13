@@ -269,16 +269,6 @@ async function bootstrap() {
           },
         });
       }
-    } else if (state.isAuthenticated && !state.isE2eeReady) {
-      // E2EE master key unlock prompt
-      if (!authModalInstance) {
-        authModalInstance = createAuthModal({
-          onSuccess: () => {
-            authModalInstance = null;
-          },
-        });
-        authModalInstance.setMode('unlock');
-      }
     }
   });
 

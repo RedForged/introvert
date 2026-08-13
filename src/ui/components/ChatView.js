@@ -23,8 +23,13 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
 
     // 1. Fetch peer account details
     try {
-      const accounts = await api.searchAccounts(username);
-      activePeer = accounts.find((a) => a.username === username) || { username, display_name: username };
+      const peer = await api.lookupAccount(username);
+      if (peer) {
+        activePeer = peer;
+      } else {
+        const accounts = await api.searchAccounts(username);
+        activePeer = accounts.find((a) => a.username.toLowerCase() === username.toLowerCase()) || { username, display_name: username };
+      }
     } catch (e) {
       activePeer = { username, display_name: username };
     }
@@ -35,25 +40,25 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
     try {
       const history = await api.getConversationHistory(username);
       const rawMessages = history.messages || [];
+      const currentUserId = String(config.currentUser?.id || '');
 
       // Decrypt messages
       const decrypted = await Promise.all(
         rawMessages.map(async (m) => {
+          const senderId = String(m.from_id || m.user_id || m.sender_id || '');
+          const isOwn = senderId === currentUserId || m.is_own === true;
+          const otherIdStr = String(activePeer.id || (isOwn ? m.to_id : m.from_id) || '');
+          const curveKey = activePeer.curve25519_key || activePeer.sender_curve || m.sender_curve;
+
           if (m.proto === 'olm') {
             try {
-              const isOwn = m.user_id === config.currentUser?.id;
-              const plain = await cryptoEngine.decryptDm(
-                m,
-                isOwn,
-                String(activePeer.id || m.user_id),
-                activePeer.curve25519_key
-              );
-              return { ...m, body: plain, decrypted: true };
+              const plain = await cryptoEngine.decryptDm(m, isOwn, otherIdStr, curveKey);
+              return { ...m, body: plain, is_own: isOwn, decrypted: true };
             } catch (err) {
-              return { ...m, body: '🔒 [Decryption failed or message expired]', decrypted: false };
+              return { ...m, body: '🔒 [Decryption failed or message expired]', is_own: isOwn, decrypted: false };
             }
           }
-          return { ...m, decrypted: true };
+          return { ...m, is_own: isOwn, decrypted: true };
         })
       );
 
@@ -73,7 +78,7 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
       scrollToBottom();
 
       // Check Additional Security
-      if (activePeer.secure) {
+      if (activePeer.secure || activePeer.security_active) {
         isSecureMode = true;
         // Acknowledge received messages
         const unackedIds = messages.filter((m) => !m.is_own).map((m) => m.id);
@@ -112,6 +117,7 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
       const newMsg = {
         id: res.id || Date.now(),
         user_id: config.currentUser.id,
+        from_id: config.currentUser.id,
         body: text,
         created_at: Date.now(),
         is_own: true,

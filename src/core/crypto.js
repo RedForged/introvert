@@ -499,34 +499,63 @@ class CryptoEngine {
   }
 
   async decryptDm(msg, isOwn, otherIdStr, peerCurveKey) {
-    if (msg.body && msg.body.startsWith('/uploads/stickers/')) {
+    if (!msg || !msg.body) return '';
+    if (typeof msg.body === 'string' && msg.body.startsWith('/uploads/stickers/')) {
+      return msg.body;
+    }
+
+    if (msg.proto && msg.proto !== 'olm') {
       return msg.body;
     }
 
     if (isOwn) {
-      await this.ensureSelfSessions();
-      if (!msg.sender_ciphertext) throw new Error('Missing sender ciphertext');
-      const env = JSON.parse(msg.sender_ciphertext);
-      const replay = new window.Olm.Session();
-      replay.unpickle(PICKLE_KEY, this.selfInboundBaseline);
-      return replay.decrypt(env.t, env.b);
+      if (!msg.sender_ciphertext) {
+        return msg.body;
+      }
+      try {
+        await this.ensureSelfSessions();
+        const env = typeof msg.sender_ciphertext === 'string' ? JSON.parse(msg.sender_ciphertext) : msg.sender_ciphertext;
+        if (!env || env.t === undefined || !env.b) return msg.body;
+        const replay = new window.Olm.Session();
+        replay.unpickle(PICKLE_KEY, this.selfInboundBaseline);
+        return replay.decrypt(env.t, env.b);
+      } catch (e) {
+        console.warn('Decryption of own message fallback', e);
+        return msg.body;
+      }
     }
 
     // Incoming message from peer
-    const env = JSON.parse(msg.body);
-    let session = await this.loadSession(otherIdStr);
+    let env = null;
+    try {
+      env = typeof msg.body === 'string' ? JSON.parse(msg.body) : msg.body;
+    } catch (e) {
+      return msg.body;
+    }
+
+    if (!env || env.t === undefined || !env.b) {
+      return typeof msg.body === 'string' ? msg.body : '';
+    }
+
+    let session = otherIdStr ? await this.loadSession(otherIdStr) : null;
 
     if (env.t === 0) {
       // PreKey message: instantiate inbound session
       const newSession = new window.Olm.Session();
       if (peerCurveKey) {
-        newSession.create_inbound_from(this.account, peerCurveKey, env.b);
+        try {
+          newSession.create_inbound_from(this.account, peerCurveKey, env.b);
+        } catch (e) {
+          newSession.create_inbound(this.account, env.b);
+        }
       } else {
         newSession.create_inbound(this.account, env.b);
       }
       this.account.remove_one_time_keys(newSession);
-      await this.saveSessionBaseline(otherIdStr, newSession);
-      await this.saveSession(otherIdStr, newSession);
+      if (otherIdStr) {
+        await this.saveSessionBaseline(otherIdStr, newSession);
+        await this.saveSession(otherIdStr, newSession);
+      }
       await this.saveAccount();
       return newSession.decrypt(env.t, env.b);
     }
@@ -534,17 +563,21 @@ class CryptoEngine {
     if (session) {
       try {
         const plain = session.decrypt(env.t, env.b);
-        await this.saveSession(otherIdStr, session);
+        if (otherIdStr) await this.saveSession(otherIdStr, session);
         return plain;
       } catch (e) {}
     }
 
     // Fallback: try baseline replay
-    const base = await this.loadSessionBaseline(otherIdStr);
-    if (base) {
-      const replay = new window.Olm.Session();
-      replay.unpickle(PICKLE_KEY, base.pickle(PICKLE_KEY));
-      return replay.decrypt(env.t, env.b);
+    if (otherIdStr) {
+      const base = await this.loadSessionBaseline(otherIdStr);
+      if (base) {
+        try {
+          const replay = new window.Olm.Session();
+          replay.unpickle(PICKLE_KEY, base.pickle(PICKLE_KEY));
+          return replay.decrypt(env.t, env.b);
+        } catch (e) {}
+      }
     }
 
     throw new Error('Unable to decrypt message (session ratchet state mismatch)');
