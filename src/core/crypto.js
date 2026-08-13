@@ -783,20 +783,39 @@ class CryptoEngine {
 
     if (isOwn) {
       return this.withSelfLock(async () => {
-        const raw = msg.body;
-        if (raw) {
+        if (msg.body) {
           try {
-            const env = typeof raw === 'string' ? JSON.parse(raw) : raw;
+            const env = typeof msg.body === 'string' ? JSON.parse(msg.body) : msg.body;
             if (env && env.v === 2 && env.devices && env.devices[myDevId]) {
               const target = env.devices[myDevId];
               const myUserId = String(config.currentUser?.id || '');
-              const devKey = `${myUserId}:${myDevId}`;
-              const live = await this.loadSession(devKey);
+              const senderDevId = env.sender_device_id || 'default';
+              const devKey = `${myUserId}:${senderDevId}`;
+              let live = await this.loadSession(devKey);
+              if (!live) live = await this.loadSession(myUserId);
               if (live) {
                 try {
                   const plain = live.decrypt(target.t, target.b);
                   await this.saveSession(devKey, live);
                   return plain;
+                } catch (_) {}
+              }
+              const base = await this.loadSessionBaseline(devKey);
+              if (base) {
+                try {
+                  const pBase = base.decrypt(target.t, target.b);
+                  if (pBase) return pBase;
+                } catch (_) {}
+              }
+              if (target.t === 0) {
+                const s = new window.Olm.Session();
+                try {
+                  s.create_inbound(this.account, target.b);
+                  this.account.remove_one_time_keys(s);
+                  const pNew = s.decrypt(target.t, target.b);
+                  await this.saveSession(devKey, s);
+                  await this.saveAccount();
+                  return pNew;
                 } catch (_) {}
               }
             }

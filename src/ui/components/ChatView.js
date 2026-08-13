@@ -217,6 +217,17 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
         },
       });
 
+      cryptoEngine.securePersistMessage(otherIdStr, {
+        id: newMsg.id,
+        from_id: String(config.currentUser?.id || ''),
+        created_at: newMsg.created_at,
+        edited_at: null,
+        proto: 'olm',
+        plaintext: text,
+        cipher: typeof encryptedPayload === 'object' ? JSON.stringify(encryptedPayload) : String(encryptedPayload),
+        own: true,
+      }).catch(() => {});
+
       render();
       scrollToBottom();
       refreshConversationsList();
