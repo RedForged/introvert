@@ -9,6 +9,32 @@ export function createNavigation({ onTabChange, onOpenProfile, onOpenSettings, o
 
   let currentTab = 'chats';
 
+  // Persistent Event Delegation
+  nav.addEventListener('click', (e) => {
+    const tabBtn = e.target.closest('.nav-btn[data-tab]');
+    if (tabBtn) {
+      const tab = tabBtn.getAttribute('data-tab');
+      if (tab === 'settings') {
+        if (onOpenSettings) onOpenSettings();
+        return;
+      }
+      currentTab = tab;
+      render();
+      if (onTabChange) onTabChange(tab);
+      return;
+    }
+    const logoutBtn = e.target.closest('#nav-logout-btn');
+    if (logoutBtn) {
+      if (onLogout) onLogout();
+      return;
+    }
+    const profileTrigger = e.target.closest('#nav-profile-trigger');
+    if (profileTrigger) {
+      const auth = authStore.get();
+      if (onOpenProfile) onOpenProfile(auth.user);
+    }
+  });
+
   const render = () => {
     const auth = authStore.get();
     const chats = chatStore.get();
@@ -16,7 +42,7 @@ export function createNavigation({ onTabChange, onOpenProfile, onOpenSettings, o
     const notifs = notificationStore.get();
 
     // Total unread DMs
-    const totalUnreadDms = chats.conversations.reduce((sum, c) => sum + (c.unread_count || 0), 0);
+    const totalUnreadDms = (chats.conversations || []).reduce((sum, c) => sum + (c.unread_count || 0), 0);
 
     const user = auth.user;
     const avatarUrl = user ? config.getAvatarUrl(user.avatar) : null;
@@ -92,31 +118,6 @@ export function createNavigation({ onTabChange, onOpenProfile, onOpenSettings, o
         <span class="presence-dot online"></span>
       </div>
     `;
-
-    // Event handlers
-    nav.querySelectorAll('.nav-btn[data-tab]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const tab = btn.getAttribute('data-tab');
-        if (tab === 'settings') {
-          if (onOpenSettings) onOpenSettings();
-          return;
-        }
-        currentTab = tab;
-        render();
-        if (onTabChange) onTabChange(tab);
-      });
-    });
-
-    nav.querySelector('#nav-logout-btn')?.addEventListener('click', () => {
-      if (onLogout) onLogout();
-    });
-
-    const profileTrigger = nav.querySelector('#nav-profile-trigger');
-    if (profileTrigger) {
-      profileTrigger.addEventListener('click', () => {
-        if (onOpenProfile) onOpenProfile(auth.user);
-      });
-    }
   };
 
   authStore.subscribe(render);

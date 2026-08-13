@@ -384,97 +384,92 @@ export function createRoomView({ onBack, onOpenProfile, onCreateChannel }) {
       </div>
     `;
 
-    attachEventHandlers();
+    renderRoomMessagesOnly();
   };
 
-  const attachEventHandlers = () => {
-    const backBtn = container.querySelector('#room-back-btn');
+  // Persistent Event Delegation on Container
+  container.addEventListener('click', (e) => {
+    const backBtn = e.target.closest('#room-back-btn');
     if (backBtn) {
-      backBtn.addEventListener('click', () => {
-        container.classList.remove('mobile-active');
-        if (onBack) onBack();
-      });
+      container.classList.remove('mobile-active');
+      if (onBack) onBack();
+      return;
     }
 
-    const addChannelBtn = container.querySelector('#add-channel-btn');
+    const addChannelBtn = e.target.closest('#add-channel-btn');
     if (addChannelBtn) {
-      addChannelBtn.addEventListener('click', () => {
-        if (onCreateChannel) onCreateChannel(currentRoomId);
-      });
+      if (onCreateChannel && currentRoomId) onCreateChannel(currentRoomId);
+      return;
     }
 
-    const toggleMembersBtn = container.querySelector('#toggle-members-drawer-btn');
+    const toggleMembersBtn = e.target.closest('#toggle-members-drawer-btn');
     if (toggleMembersBtn) {
-      toggleMembersBtn.addEventListener('click', () => {
-        showMembersDrawer = !showMembersDrawer;
-        render();
-      });
+      showMembersDrawer = !showMembersDrawer;
+      render();
+      return;
     }
 
-    // Channel item clicks
-    container.querySelectorAll('.channel-item').forEach((item) => {
-      item.addEventListener('click', () => {
-        const channelId = Number(item.getAttribute('data-channel-id'));
-        const found = (activeRoom.channels || []).find((c) => c.id === channelId);
-        if (found) {
-          activeChannel = found;
-          roomStore.set({ activeChannel });
-          render();
-          if (activeChannel.type === 'text' || !activeChannel.type) {
-            loadChannelMessages(activeChannel.id);
-          }
+    const channelItem = e.target.closest('.channel-item');
+    if (channelItem) {
+      const channelId = Number(channelItem.getAttribute('data-channel-id'));
+      const found = (activeRoom?.channels || []).find((c) => c.id === channelId);
+      if (found) {
+        activeChannel = found;
+        roomStore.set({ activeChannel });
+        render();
+        if (activeChannel.type === 'text' || !activeChannel.type) {
+          loadChannelMessages(activeChannel.id);
         }
-      });
-    });
+      }
+      return;
+    }
 
-    // Voice connect / disconnect
-    const joinVoiceBtn = container.querySelector('#join-voice-btn');
+    const joinVoiceBtn = e.target.closest('#join-voice-btn');
     if (joinVoiceBtn) {
-      joinVoiceBtn.addEventListener('click', () => {
-        if (activeChannel) {
-          webrtc.joinVoiceChannel(activeChannel.id);
-          render();
-        }
-      });
-    }
-
-    const leaveVoiceBtn = container.querySelector('#leave-voice-btn');
-    if (leaveVoiceBtn) {
-      leaveVoiceBtn.addEventListener('click', () => {
-        webrtc.leaveVoiceChannel();
+      if (activeChannel) {
+        webrtc.joinVoiceChannel(activeChannel.id);
         render();
-      });
+      }
+      return;
     }
 
-    // Member profile clicks
-    container.querySelectorAll('.room-member-item').forEach((item) => {
-      item.addEventListener('click', () => {
-        const username = item.getAttribute('data-username');
-        const member = (activeRoom.members || []).find((m) => m.username === username);
-        if (member && onOpenProfile) onOpenProfile(member);
-      });
-    });
+    const leaveVoiceBtn = e.target.closest('#leave-voice-btn');
+    if (leaveVoiceBtn) {
+      webrtc.leaveVoiceChannel();
+      render();
+      return;
+    }
 
-    // Text Send
-    const sendBtn = container.querySelector('#room-send-btn');
+    const memberItem = e.target.closest('.room-member-item');
+    if (memberItem) {
+      const username = memberItem.getAttribute('data-username');
+      const member = (activeRoom?.members || []).find((m) => m.username === username);
+      if (member && onOpenProfile) onOpenProfile(member);
+      return;
+    }
+
+    const sendBtn = e.target.closest('#room-send-btn');
     if (sendBtn) {
-      sendBtn.addEventListener('click', handleSend);
+      handleSend();
+      return;
     }
+  });
 
-    const input = container.querySelector('#room-composer-input');
-    if (input) {
-      input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-          e.preventDefault();
-          handleSend();
-        }
-      });
-      input.addEventListener('input', () => {
-        input.style.height = 'auto';
-        input.style.height = `${Math.min(input.scrollHeight, 120)}px`;
-      });
+  container.addEventListener('keydown', (e) => {
+    if (e.target && e.target.id === 'room-composer-input') {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        handleSend();
+      }
     }
-  };
+  });
+
+  container.addEventListener('input', (e) => {
+    if (e.target && e.target.id === 'room-composer-input') {
+      e.target.style.height = 'auto';
+      e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
+    }
+  });
 
   function escapeHtml(str) {
     if (!str) return '';
@@ -483,6 +478,7 @@ export function createRoomView({ onBack, onOpenProfile, onCreateChannel }) {
     return div.innerHTML;
   }
 
+  roomStore.subscribe(render);
   render();
   return {
     element: container,

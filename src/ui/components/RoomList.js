@@ -31,15 +31,24 @@ export function createRoomList({ onSelectRoom, onCreateRoom }) {
     <div class="sidebar-list" id="room-sidebar-list"></div>
   `;
 
+  // Persistent Event Delegation
+  container.addEventListener('click', (e) => {
+    const createBtn = e.target.closest('#create-room-btn');
+    if (createBtn) {
+      if (onCreateRoom) onCreateRoom();
+      return;
+    }
+    const item = e.target.closest('.list-item');
+    if (item) {
+      const roomId = Number(item.getAttribute('data-room-id'));
+      if (roomId && onSelectRoom) onSelectRoom(roomId);
+    }
+  });
+
   const searchInput = container.querySelector('#room-search-input');
   searchInput?.addEventListener('input', (e) => {
     searchQuery = e.target.value;
     updateList();
-  });
-
-  const createBtn = container.querySelector('#create-room-btn');
-  createBtn?.addEventListener('click', () => {
-    if (onCreateRoom) onCreateRoom();
   });
 
   const updateList = () => {
@@ -89,13 +98,6 @@ export function createRoomList({ onSelectRoom, onCreateRoom }) {
             `;
           })
           .join('');
-
-    listEl.querySelectorAll('.list-item').forEach((item) => {
-      item.addEventListener('click', () => {
-        const roomId = Number(item.getAttribute('data-room-id'));
-        if (onSelectRoom) onSelectRoom(roomId);
-      });
-    });
   };
 
   function escapeHtml(str) {

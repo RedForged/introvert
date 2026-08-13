@@ -43,15 +43,24 @@ export function createChatList({ onSelectConversation, onStartNewDm }) {
     <div class="sidebar-list" id="chat-sidebar-list"></div>
   `;
 
+  // Persistent Event Delegation
+  container.addEventListener('click', (e) => {
+    const item = e.target.closest('.list-item');
+    if (item) {
+      const username = item.getAttribute('data-username');
+      if (username && onSelectConversation) onSelectConversation(username);
+      return;
+    }
+    const newBtn = e.target.closest('#new-chat-btn');
+    if (newBtn) {
+      if (onStartNewDm) onStartNewDm();
+    }
+  });
+
   const searchInput = container.querySelector('#chat-search-input');
   searchInput?.addEventListener('input', (e) => {
     searchQuery = e.target.value;
     updateList();
-  });
-
-  const newChatBtn = container.querySelector('#new-chat-btn');
-  newChatBtn?.addEventListener('click', () => {
-    if (onStartNewDm) onStartNewDm();
   });
 
   const updateList = () => {
@@ -110,13 +119,6 @@ export function createChatList({ onSelectConversation, onStartNewDm }) {
             `;
           })
           .join('');
-
-    listEl.querySelectorAll('.list-item').forEach((item) => {
-      item.addEventListener('click', () => {
-        const username = item.getAttribute('data-username');
-        if (onSelectConversation) onSelectConversation(username);
-      });
-    });
   };
 
   function escapeHtml(str) {

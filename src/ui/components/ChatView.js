@@ -352,7 +352,6 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
     `;
 
     renderMessagesOnly();
-    attachEventHandlers();
   };
 
   const renderComposer = () => {
@@ -360,98 +359,98 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
     if (btn) btn.disabled = isSending;
   };
 
-  const attachEventHandlers = () => {
-    const backBtn = container.querySelector('#chat-back-btn');
+  // Persistent Event Delegation on Container
+  container.addEventListener('click', (e) => {
+    const backBtn = e.target.closest('#chat-back-btn');
     if (backBtn) {
-      backBtn.addEventListener('click', () => {
-        container.classList.remove('mobile-active');
-        if (onBack) onBack();
-      });
+      container.classList.remove('mobile-active');
+      if (onBack) onBack();
+      return;
     }
 
-    const peerProfileBtn = container.querySelector('#chat-peer-profile-btn');
+    const peerProfileBtn = e.target.closest('#chat-peer-profile-btn');
     if (peerProfileBtn) {
-      peerProfileBtn.addEventListener('click', () => {
-        if (onOpenProfile) onOpenProfile(activePeer);
-      });
+      if (onOpenProfile && activePeer) onOpenProfile(activePeer);
+      return;
     }
 
-    const safetyBtn = container.querySelector('#safety-keys-btn');
+    const safetyBtn = e.target.closest('#safety-keys-btn');
     if (safetyBtn) {
-      safetyBtn.addEventListener('click', () => {
-        if (onOpenSafetyModal) onOpenSafetyModal(currentUsername);
-      });
+      if (onOpenSafetyModal && currentUsername) onOpenSafetyModal(currentUsername);
+      return;
     }
 
-    const voiceCallBtn = container.querySelector('#voice-call-btn');
+    const voiceCallBtn = e.target.closest('#voice-call-btn');
     if (voiceCallBtn) {
-      voiceCallBtn.addEventListener('click', () => {
-        webrtc.startCall(currentUsername, false);
-      });
+      if (currentUsername) webrtc.startCall(currentUsername, false);
+      return;
     }
 
-    const videoCallBtn = container.querySelector('#video-call-btn');
+    const videoCallBtn = e.target.closest('#video-call-btn');
     if (videoCallBtn) {
-      videoCallBtn.addEventListener('click', () => {
-        webrtc.startCall(currentUsername, true);
-      });
+      if (currentUsername) webrtc.startCall(currentUsername, true);
+      return;
     }
 
-    const sendBtn = container.querySelector('#composer-send-btn');
+    const sendBtn = e.target.closest('#composer-send-btn');
     if (sendBtn) {
-      sendBtn.addEventListener('click', handleSend);
+      handleSend();
+      return;
     }
 
-    const input = container.querySelector('#composer-input');
-    if (input) {
-      input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-          e.preventDefault();
-          handleSend();
+    const attachBtn = e.target.closest('#attach-file-btn');
+    if (attachBtn) {
+      const fileInput = container.querySelector('#file-input');
+      if (fileInput) fileInput.click();
+      return;
+    }
+
+    const restoreBtn = e.target.closest('.restore-trigger-btn');
+    if (restoreBtn) {
+      createRestoreBackupModal({
+        onSuccess: () => {
+          if (currentUsername) loadConversation(currentUsername);
+        },
+      });
+      return;
+    }
+  });
+
+  container.addEventListener('keydown', (e) => {
+    if (e.target && e.target.id === 'composer-input') {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        handleSend();
+      }
+    }
+  });
+
+  container.addEventListener('input', (e) => {
+    if (e.target && e.target.id === 'composer-input') {
+      e.target.style.height = 'auto';
+      e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
+    }
+  });
+
+  container.addEventListener('change', async (e) => {
+    if (e.target && e.target.id === 'file-input') {
+      const file = e.target.files?.[0];
+      if (!file || !currentUsername) return;
+      try {
+        showToast('info', 'Uploading attachment...');
+        const media = await api.uploadMedia(file);
+        if (media && media.url) {
+          const otherIdStr = String(activePeer?.id || '');
+          const encryptedPayload = await cryptoEngine.encryptDm(otherIdStr, currentUsername, `[Attachment: ${media.url}]`);
+          encryptedPayload.media_path = media.url;
+          await api.sendDirectMessage(currentUsername, encryptedPayload);
+          loadConversation(currentUsername);
         }
-      });
-      // Auto resize
-      input.addEventListener('input', () => {
-        input.style.height = 'auto';
-        input.style.height = `${Math.min(input.scrollHeight, 120)}px`;
-      });
+      } catch (err) {
+        showToast('danger', 'Media upload failed', err.message);
+      }
     }
-
-    const attachBtn = container.querySelector('#attach-file-btn');
-    const fileInput = container.querySelector('#file-input');
-    if (attachBtn && fileInput) {
-      attachBtn.addEventListener('click', () => fileInput.click());
-      fileInput.addEventListener('change', async (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-        try {
-          showToast('info', 'Uploading attachment...');
-          const media = await api.uploadMedia(file);
-          if (media && media.url) {
-            // Send media message
-            const otherIdStr = String(activePeer.id || '');
-            const encryptedPayload = await cryptoEngine.encryptDm(otherIdStr, currentUsername, `[Attachment: ${media.url}]`);
-            encryptedPayload.media_path = media.url;
-            await api.sendDirectMessage(currentUsername, encryptedPayload);
-            loadConversation(currentUsername);
-          }
-        } catch (err) {
-          showToast('danger', 'Media upload failed', err.message);
-        }
-      });
-    }
-
-    container.querySelectorAll('.restore-trigger-btn').forEach((btn) => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        createRestoreBackupModal({
-          onSuccess: () => {
-            if (currentUsername) loadConversation(currentUsername);
-          },
-        });
-      });
-    });
-  };
+  });
 
   function escapeHtml(str) {
     if (!str) return '';

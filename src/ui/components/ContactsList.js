@@ -28,6 +28,22 @@ export function createContactsList({ onStartChat, onOpenProfile }) {
     <div class="sidebar-list" id="contacts-sidebar-list"></div>
   `;
 
+  // Persistent Event Delegation
+  container.addEventListener('click', (e) => {
+    const callBtn = e.target.closest('.start-call-icon-btn');
+    if (callBtn) {
+      e.stopPropagation();
+      const username = callBtn.getAttribute('data-username');
+      if (username) webrtc.startCall(username, false);
+      return;
+    }
+    const item = e.target.closest('.list-item');
+    if (item) {
+      const username = item.getAttribute('data-username');
+      if (username && onStartChat) onStartChat(username);
+    }
+  });
+
   const searchInput = container.querySelector('#contacts-search-input');
   searchInput?.addEventListener('input', (e) => {
     searchQuery = e.target.value;
@@ -90,22 +106,6 @@ export function createContactsList({ onStartChat, onOpenProfile }) {
             `;
           })
           .join('');
-
-    listEl.querySelectorAll('.list-item').forEach((item) => {
-      item.addEventListener('click', (e) => {
-        if (e.target.closest('.start-call-icon-btn')) return;
-        const username = item.getAttribute('data-username');
-        if (onStartChat) onStartChat(username);
-      });
-    });
-
-    listEl.querySelectorAll('.start-call-icon-btn').forEach((btn) => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const username = btn.getAttribute('data-username');
-        webrtc.startCall(username, false);
-      });
-    });
   };
 
   function escapeHtml(str) {
