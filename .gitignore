@@ -6,6 +6,7 @@ dist/
 # Tauri / Rust build artifacts
 src-tauri/target/
 src-tauri/gen/
+release-artifacts/
 **/*.rs.bk
 
 # OS Files
