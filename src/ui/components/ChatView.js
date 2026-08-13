@@ -21,17 +21,23 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
     container.classList.add('mobile-active');
 
     // 1. Fetch peer account details
-    try {
-      const peer = await api.lookupAccount(username);
-      if (peer) {
-        activePeer = peer;
-      } else {
-        const accounts = await api.searchAccounts(username);
-        activePeer = accounts.find((a) => a.username.toLowerCase() === username.toLowerCase()) || { username, display_name: username };
-      }
-    } catch (e) {
-      activePeer = { username, display_name: username };
+    activePeer = { username, display_name: username };
+    const conv = (chatStore.get().conversations || []).find(
+      (c) => c.username && c.username.toLowerCase() === username.toLowerCase()
+    );
+    if (conv) {
+      activePeer = { ...conv };
     }
+
+    try {
+      const searchRes = await api.searchAccounts(username);
+      const exact = searchRes.find(
+        (a) => a.username && a.username.toLowerCase() === username.toLowerCase()
+      );
+      if (exact) {
+        activePeer = { ...activePeer, ...exact };
+      }
+    } catch (e) {}
 
     render();
 
@@ -41,12 +47,26 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
       const rawMessages = history.messages || [];
       const currentUserId = String(config.currentUser?.id || '');
 
+      // Infer peer ID if not yet known
+      if (!activePeer.id && rawMessages.length > 0) {
+        for (const m of rawMessages) {
+          const sId = String(m.from_id || m.user_id || '');
+          if (sId && sId !== currentUserId) {
+            activePeer.id = sId;
+            break;
+          } else if (m.to_id && String(m.to_id) !== currentUserId) {
+            activePeer.id = String(m.to_id);
+            break;
+          }
+        }
+      }
+
       // Decrypt messages
       const decrypted = await Promise.all(
         rawMessages.map(async (m) => {
           const senderId = String(m.from_id || m.user_id || m.sender_id || '');
           const isOwn = senderId === currentUserId || m.is_own === true;
-          const otherIdStr = String(activePeer.id || (isOwn ? m.to_id : m.from_id) || '');
+          const otherIdStr = String(activePeer.id || (isOwn ? m.to_id : m.from_id) || username);
           const curveKey = activePeer.curve25519_key || activePeer.sender_curve || m.sender_curve;
 
           let isOlm = m.proto === 'olm';
@@ -117,7 +137,7 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
     renderComposer();
 
     try {
-      const otherIdStr = String(activePeer.id || '');
+      const otherIdStr = String(activePeer.id || currentUsername);
       const encryptedPayload = await cryptoEngine.encryptDm(otherIdStr, currentUsername, text);
 
       const res = await api.sendDirectMessage(currentUsername, encryptedPayload);

@@ -302,7 +302,7 @@ class CryptoEngine {
     if (!acct) {
       // First time on this device: generate fresh Olm account and publish keys
       await this.createAndPublishAccount();
-      await this.initSelfSession();
+      await this.ensureSelfSessions();
     } else {
       await this.loadSelfSessions();
       this.maybeReplenishPrekeys();
@@ -350,8 +350,15 @@ class CryptoEngine {
     if (!this.account) {
       await this.ensureReady();
     }
-    const encBackup = await this.encryptWithKek(this.account.pickle(PICKLE_KEY), this.kek);
-    await api.publishPrekeys({ backup: encBackup });
+    const pickle = this.account.pickle(PICKLE_KEY);
+    const enc = await this.encryptWithKek(pickle, this.kek);
+    await api.publishPrekeys({
+      identity_key: this.myIdKeys.curve25519,
+      ed25519_key: this.myIdKeys.ed25519,
+      fallback_key: null,
+      one_time_keys: [],
+      backup: enc,
+    });
     return true;
   }
 
@@ -461,6 +468,17 @@ class CryptoEngine {
   }
 
   async getOrCreateOutboundSession(otherIdStr, otherUsername) {
+    const extractKey = (val) => {
+      if (!val) return null;
+      if (typeof val === 'string') return val.trim();
+      if (typeof val === 'object') {
+        if (val.public_key && typeof val.public_key === 'string') return val.public_key.trim();
+        const keys = Object.keys(val);
+        if (keys.length > 0 && typeof val[keys[0]] === 'string') return val[keys[0]].trim();
+      }
+      return null;
+    };
+
     const existing = await this.loadSession(otherIdStr);
     if (existing) {
       const storedIdent = await this.idbGet(STORE_OLM, `sessionIdent:${otherIdStr}`);
@@ -480,13 +498,20 @@ class CryptoEngine {
     if (!bundle || !bundle.identity_key) {
       throw new Error(`User @${otherUsername} has not published encryption keys yet.`);
     }
-    const otk = bundle.one_time_key ? bundle.one_time_key.public_key : bundle.fallback_key;
+
+    const recipientIdent = extractKey(bundle.identity_key);
+    const otk = extractKey(bundle.one_time_key) || extractKey(bundle.fallback_key);
+
+    if (!recipientIdent || !otk) {
+      throw new Error(`Recipient @${otherUsername} has no valid encryption keys available.`);
+    }
+
     const session = new window.Olm.Session();
-    session.create_outbound(this.account, bundle.identity_key, otk);
+    session.create_outbound(this.account, recipientIdent, otk);
 
     await this.saveSessionBaseline(otherIdStr, session);
     await this.saveSession(otherIdStr, session);
-    await this.idbSet(STORE_OLM, `sessionIdent:${otherIdStr}`, bundle.identity_key);
+    await this.idbSet(STORE_OLM, `sessionIdent:${otherIdStr}`, recipientIdent);
     return session;
   }
 
@@ -553,7 +578,7 @@ class CryptoEngine {
           }
         }
 
-        if (!selfEnv || selfEnv.t === undefined || !selfEnv.b) {
+        if (!selfEnv || selfEnv.t === undefined || selfEnv.b === undefined) {
           return typeof msg.body === 'string' ? msg.body : '';
         }
 
@@ -592,29 +617,33 @@ class CryptoEngine {
           await this.saveSession(otherIdStr, newSession);
         }
         await this.saveAccount();
-        return newSession.decrypt(env.t, env.b);
+        const plain = newSession.decrypt(env.t, env.b);
+        if (otherIdStr) {
+          await this.saveSession(otherIdStr, newSession);
+        }
+        return plain;
       } catch (e) {
         console.warn('PreKey inbound session creation error', e);
       }
     }
 
-    // Non-PreKey message (t > 0): decrypt with baseline session or active session
+    // Non-PreKey message (t > 0): decrypt with active live session, falling back to baseline
     if (otherIdStr) {
-      const base = await this.loadSessionBaseline(otherIdStr);
-      if (base) {
-        try {
-          const replay = new window.Olm.Session();
-          replay.unpickle(PICKLE_KEY, base.pickle(PICKLE_KEY));
-          return replay.decrypt(env.t, env.b);
-        } catch (e) {}
-      }
-
       const session = await this.loadSession(otherIdStr);
       if (session) {
         try {
           const plain = session.decrypt(env.t, env.b);
           await this.saveSession(otherIdStr, session);
           return plain;
+        } catch (e) {}
+      }
+
+      const base = await this.loadSessionBaseline(otherIdStr);
+      if (base) {
+        try {
+          const replay = new window.Olm.Session();
+          replay.unpickle(PICKLE_KEY, base.pickle(PICKLE_KEY));
+          return replay.decrypt(env.t, env.b);
         } catch (e) {}
       }
     }
