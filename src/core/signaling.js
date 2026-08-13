@@ -57,6 +57,7 @@ class SignalingClient {
       this.reconnectAttempts = 0;
       this.startHeartbeat();
       this.send({ type: 'ping' });
+      this.send({ type: 'register_dm' });
       this.emit('connected');
     };
 
@@ -158,6 +159,13 @@ class SignalingClient {
           sender_curve: msg.sender_curve,
           from_username: msg.from_username,
           from_display: msg.from_display,
+        });
+        break;
+
+      case 'delete_dm':
+        this.emit('delete_dm', {
+          message_id: msg.message_id,
+          from_username: msg.from_username,
         });
         break;
 

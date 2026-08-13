@@ -131,6 +131,14 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
         }
       }
 
+      // Clean up cached messages that were deleted on the server (non-secure mode)
+      const serverMsgIds = new Set(ordered.map((m) => String(m.id)));
+      for (const [id] of cachedMap.entries()) {
+        if (!serverMsgIds.has(id)) {
+          cryptoEngine.secureDeleteMessage(cacheKey, id).catch(() => {});
+        }
+      }
+
       // Merge in any live messages that arrived while history was loading so
       // this overwrite doesn't drop them.
       const liveMsgs = chatStore.get().messages[username] || [];

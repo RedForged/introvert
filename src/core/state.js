@@ -215,6 +215,22 @@ export async function initAppStores() {
     }
   });
 
+  signaling.on('delete_dm', (data) => {
+    const mid = String(data.message_id);
+    const fromUser = data.from_username;
+    const current = chatStore.get().messages;
+    const updated = {};
+    for (const u of Object.keys(current)) {
+      updated[u] = (current[u] || []).filter((m) => String(m.id) !== mid);
+    }
+    chatStore.set({ messages: updated });
+    const activePeer = chatStore.get().activePeer;
+    if (activePeer && activePeer.id) {
+      cryptoEngine.secureDeleteMessage(String(activePeer.id), mid).catch(() => {});
+    }
+    refreshConversationsList();
+  });
+
   if (config.token) {
     signaling.connect();
     bootstrapAuthenticatedData();

@@ -933,6 +933,20 @@ class CryptoEngine {
       msgs.sort((a, b) => a.created_at - b.created_at || Number(a.id) - Number(b.id));
       const enc = await this.encryptWithKd(JSON.stringify(msgs));
       await this.idbSet(STORE_SECURE, `conv:${otherIdStr}`, enc);
+      this.scheduleHistorySync();
+    });
+    this.secureWriteQueues[otherIdStr] = next.catch(() => {});
+    return next;
+  }
+
+  async secureDeleteMessage(otherIdStr, msgId) {
+    const prev = this.secureWriteQueues[otherIdStr] || Promise.resolve();
+    const next = prev.then(async () => {
+      const msgs = await this.secureLoadMessages(otherIdStr);
+      const filtered = msgs.filter((m) => String(m.id) !== String(msgId));
+      const enc = await this.encryptWithKd(JSON.stringify(filtered));
+      await this.idbSet(STORE_SECURE, `conv:${otherIdStr}`, enc);
+      this.scheduleHistorySync();
     });
     this.secureWriteQueues[otherIdStr] = next.catch(() => {});
     return next;
