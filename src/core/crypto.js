@@ -842,6 +842,8 @@ class CryptoEngine {
       senderDeviceId = env.sender_device_id || 'default';
       if (env.devices[myDevId]) {
         cipherToDecrypt = env.devices[myDevId];
+      } else if (env.t !== undefined && env.b) {
+        cipherToDecrypt = { t: env.t, b: env.b };
       } else {
         const devKeys = Object.keys(env.devices);
         if (devKeys.length) cipherToDecrypt = env.devices[devKeys[0]];
