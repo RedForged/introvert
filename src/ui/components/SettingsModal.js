@@ -109,7 +109,7 @@ export function createSettingsModal({ onClose, onAddAccount, onLogout }) {
     overlay.innerHTML = `
       <div class="modal-card" style="max-width:540px; height:80vh;">
         <div class="modal-header">
-          <span class="modal-title">Settings</span>
+          <span class="modal-title">Settings <span style="font-size:11px; opacity:0.55; font-weight:600;">· v${appVersion} · ${devId}</span></span>
           <button class="icon-btn" id="close-settings-btn" title="Close">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <line x1="18" y1="6" x2="6" y2="18"></line>
