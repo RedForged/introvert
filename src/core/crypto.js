@@ -736,19 +736,26 @@ class CryptoEngine {
 
     const cached = this.sessions[fullKey] || (await this.loadSession(fullKey));
     if (cached) {
+      let mustRotate = false;
       if (freshOtkId) {
         const usedOtk = await this.idbGet(STORE_OLM, `sessionOtk:${fullKey}`);
-        if (usedOtk === null || usedOtk === undefined || String(usedOtk) === String(freshOtkId)) {
-          return cached;
+        if (usedOtk !== null && usedOtk !== undefined && String(usedOtk) !== String(freshOtkId)) {
+          mustRotate = true;
         }
-        // Peer rotated keys — drop the old ratchet and start fresh.
+      }
+      if (!mustRotate && identityKey) {
+        const storedIdent = await this.idbGet(STORE_OLM, `sessionIdent:${fullKey}`);
+        if (storedIdent !== null && storedIdent !== undefined && String(storedIdent) !== String(identityKey)) {
+          // The peer rotated its identity — the session can never work again.
+          mustRotate = true;
+        }
+      }
+      if (mustRotate) {
         await this.idbDelete(STORE_OLM, `session:${fullKey}`);
         await this.idbDelete(STORE_OLM, `sessionBase:${fullKey}`);
         delete this.sessions[fullKey];
         delete this.sessionBaselines[fullKey];
       } else {
-        // Peer's pool is drained right now — keep the established session
-        // (fallback keys are only for brand-new sessions).
         return cached;
       }
     }
