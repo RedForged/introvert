@@ -160,13 +160,38 @@ export async function initAppStores() {
       await cryptoEngine.ensureReady();
       const currentUserId = String(config.currentUser?.id || '');
       const currentUsername = config.currentUser?.username || '';
-      const fromUser = dmEvent.from_username;
-      const msgFromId = String(dmEvent.message.from_id || dmEvent.message.sender_id || '');
-      const isOwn = msgFromId === currentUserId || fromUser === currentUsername;
+      const fromUser = dmEvent.from_username || '';
+      const msgFromId = String(dmEvent.message?.from_id || dmEvent.message?.sender_id || '');
+      const isOwn = msgFromId === currentUserId || (fromUser && fromUser.toLowerCase() === currentUsername.toLowerCase());
 
-      const targetUser = isOwn ? (dmEvent.to_username || fromUser) : fromUser;
+      let targetUser = fromUser;
+      if (isOwn) {
+        if (dmEvent.to_username) {
+          targetUser = dmEvent.to_username;
+        } else {
+          const toIdStr = String(dmEvent.message?.to_id || '');
+          const matchingConv = (chatStore.get().conversations || []).find((c) => String(c.id) === toIdStr);
+          if (matchingConv && matchingConv.username) {
+            targetUser = matchingConv.username;
+          } else if (chatStore.get().activeConversation) {
+            targetUser = chatStore.get().activeConversation;
+          }
+        }
+      }
+
+      // Canonicalize targetUser against active conversation or conversation list
+      const activeConv = chatStore.get().activeConversation;
+      if (activeConv && activeConv.toLowerCase() === targetUser.toLowerCase()) {
+        targetUser = activeConv;
+      } else {
+        const matchingConv = (chatStore.get().conversations || []).find((c) => c.username && c.username.toLowerCase() === targetUser.toLowerCase());
+        if (matchingConv && matchingConv.username) {
+          targetUser = matchingConv.username;
+        }
+      }
+
       const otherIdStr = isOwn
-        ? String(dmEvent.message.to_id || msgFromId)
+        ? String(dmEvent.message?.to_id || msgFromId)
         : msgFromId;
 
       const plain = await cryptoEngine.decryptDm(
@@ -184,6 +209,7 @@ export async function initAppStores() {
         created_at: dmEvent.message.created_at || Date.now(),
         is_own: isOwn,
         proto: 'olm',
+        decrypted: typeof plain === 'string' && !plain.startsWith('[Unable to decrypt'),
       };
 
       // Cache the plaintext so reopening the chat never re-runs crypto on an
@@ -203,7 +229,10 @@ export async function initAppStores() {
       }
 
       const msgs = chatStore.get().messages[targetUser] || [];
-      if (msgs.some((x) => String(x.id) === String(newMsg.id))) return;
+      if (msgs.some((x) => String(x.id) === String(newMsg.id))) {
+        refreshConversationsList();
+        return;
+      }
       chatStore.set({
         messages: {
           ...chatStore.get().messages,
@@ -215,7 +244,7 @@ export async function initAppStores() {
       refreshConversationsList();
 
       // Show toast if not on active thread and not own message
-      if (!isOwn && chatStore.get().activeConversation !== fromUser) {
+      if (!isOwn && (!activeConv || activeConv.toLowerCase() !== fromUser.toLowerCase())) {
         showToast('message', `New message from ${dmEvent.from_display || fromUser}`, plain.slice(0, 80));
       }
     } catch (err) {

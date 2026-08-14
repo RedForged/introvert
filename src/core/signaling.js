@@ -159,6 +159,7 @@ class SignalingClient {
           sender_curve: msg.sender_curve,
           from_username: msg.from_username,
           from_display: msg.from_display,
+          to_username: msg.to_username,
         });
         break;
 

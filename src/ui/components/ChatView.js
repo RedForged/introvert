@@ -549,11 +549,12 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
 
   // Subscribe to reactive store
   chatStore.subscribe((state) => {
-    if (state.activeConversation && state.activeConversation !== currentUsername) {
+    if (state.activeConversation && state.activeConversation.toLowerCase() !== (currentUsername || '').toLowerCase()) {
       loadConversation(state.activeConversation);
-    } else if (state.activeConversation && state.messages[state.activeConversation]) {
-      const newMsgs = state.messages[state.activeConversation];
-      if (newMsgs !== messages) {
+    } else if (currentUsername) {
+      const convKey = Object.keys(state.messages).find((k) => k.toLowerCase() === currentUsername.toLowerCase()) || currentUsername;
+      const newMsgs = state.messages[convKey];
+      if (newMsgs && newMsgs !== messages) {
         messages = newMsgs;
         renderMessagesOnly();
         scrollToBottom();
