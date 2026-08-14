@@ -41,6 +41,17 @@
   --nav-width: 68px;
   --sidebar-width: 290px;
   --header-height: 56px;
+
+  /* Dynamic Safe Area Insets (populated by Android Bridge or WebKit env) */
+  --safe-area-top: env(safe-area-inset-top, 0px);
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-left: env(safe-area-inset-left, 0px);
+  --safe-area-right: env(safe-area-inset-right, 0px);
+
+  --safe-top: var(--safe-area-top, env(safe-area-inset-top, 0px));
+  --safe-bottom: var(--safe-area-bottom, env(safe-area-inset-bottom, 0px));
+  --safe-left: var(--safe-area-left, env(safe-area-inset-left, 0px));
+  --safe-right: var(--safe-area-right, env(safe-area-inset-right, 0px));
 }
 
 [data-theme="emerald"] {
@@ -111,12 +122,10 @@ input, textarea, [contenteditable="true"] {
   display: flex;
   width: 100vw;
   height: 100vh;
+  height: 100dvh;
   position: relative;
   background: var(--bg-canvas);
-  padding-top: env(safe-area-inset-top, 0);
-  padding-bottom: env(safe-area-inset-bottom, 0);
-  padding-left: env(safe-area-inset-left, 0);
-  padding-right: env(safe-area-inset-right, 0);
+  overflow: hidden;
 }
 
 .app-container {
@@ -876,7 +885,7 @@ input, textarea, [contenteditable="true"] {
 }
 
 .call-header {
-  padding: 20px 24px;
+  padding: calc(20px + var(--safe-top)) max(24px, var(--safe-right)) 20px max(24px, var(--safe-left));
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -979,7 +988,7 @@ input, textarea, [contenteditable="true"] {
 }
 
 .call-controls {
-  padding: 24px;
+  padding: 20px max(24px, var(--safe-right)) calc(24px + var(--safe-bottom)) max(24px, var(--safe-left));
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1030,8 +1039,8 @@ input, textarea, [contenteditable="true"] {
 
 .incoming-call-modal {
   position: fixed;
-  top: 24px;
-  right: 24px;
+  top: max(24px, calc(16px + var(--safe-top)));
+  right: max(24px, calc(16px + var(--safe-right)));
   background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-lg);
@@ -1061,7 +1070,7 @@ input, textarea, [contenteditable="true"] {
   align-items: center;
   justify-content: center;
   z-index: 150;
-  padding: 20px;
+  padding: max(20px, calc(16px + var(--safe-top))) max(16px, calc(16px + var(--safe-right))) max(20px, calc(16px + var(--safe-bottom))) max(16px, calc(16px + var(--safe-left)));
   animation: fadeIn 0.2s ease;
 }
 
@@ -1217,8 +1226,8 @@ input, textarea, [contenteditable="true"] {
 
 .toast-container {
   position: fixed;
-  bottom: 24px;
-  right: 24px;
+  bottom: calc(24px + var(--safe-bottom));
+  right: max(24px, var(--safe-right));
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -1251,38 +1260,85 @@ input, textarea, [contenteditable="true"] {
 @media (max-width: 768px) {
   .app-container {
     position: relative;
+    width: 100vw;
+    height: 100dvh;
+    height: 100vh;
   }
   .nav-rail {
     position: fixed;
     bottom: 0;
     left: 0;
     width: 100vw;
-    height: 56px;
+    height: calc(56px + var(--safe-bottom));
+    padding-bottom: var(--safe-bottom);
+    padding-top: 0;
+    padding-left: max(10px, var(--safe-left));
+    padding-right: max(10px, var(--safe-right));
     flex-direction: row;
     justify-content: space-around;
-    padding: 0 10px;
+    align-items: center;
     border-right: none;
     border-top: 1px solid var(--border-subtle);
+    background-color: var(--bg-surface);
+    z-index: 25;
+    box-sizing: border-box;
   }
   .nav-logo, .nav-divider, .nav-spacer {
     display: none;
   }
   .sidebar-pane {
     width: 100vw;
-    height: calc(100vh - 56px);
+    height: calc(100dvh - 56px - var(--safe-bottom));
+    height: calc(100vh - 56px - var(--safe-bottom));
+    background-color: var(--bg-surface);
+    box-sizing: border-box;
+  }
+  .sidebar-header {
+    height: calc(var(--header-height) + var(--safe-top));
+    padding-top: var(--safe-top);
+    padding-left: max(16px, var(--safe-left));
+    padding-right: max(16px, var(--safe-right));
+    background-color: var(--bg-surface);
+    box-sizing: border-box;
   }
   .main-stage {
     position: fixed;
     inset: 0;
     z-index: 30;
-    height: calc(100vh - 56px);
+    width: 100vw;
+    height: 100dvh;
+    height: 100vh;
     display: none;
+    flex-direction: column;
+    background-color: var(--bg-canvas);
   }
   .main-stage.mobile-active {
     display: flex;
   }
+  .stage-header {
+    height: calc(var(--header-height) + var(--safe-top));
+    padding-top: var(--safe-top);
+    padding-left: max(16px, var(--safe-left));
+    padding-right: max(16px, var(--safe-right));
+    background-color: var(--bg-surface);
+    box-sizing: border-box;
+    flex-shrink: 0;
+  }
+  .composer-container {
+    padding-bottom: calc(12px + var(--safe-bottom));
+    padding-left: max(16px, var(--safe-left));
+    padding-right: max(16px, var(--safe-right));
+    background-color: var(--bg-surface);
+    box-sizing: border-box;
+    flex-shrink: 0;
+  }
   .mobile-back-btn {
     display: flex !important;
+  }
+  .toast-container {
+    bottom: calc(72px + var(--safe-bottom));
+    right: max(16px, var(--safe-right));
+    left: max(16px, var(--safe-left));
   }
 }
 

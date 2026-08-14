@@ -117,6 +117,11 @@ export async function initAppStores() {
 
   // Apply theme class to document
   document.documentElement.setAttribute('data-theme', config.theme);
+  try {
+    if (window.AndroidBridge?.updateTheme) {
+      window.AndroidBridge.updateTheme(config.theme === 'light');
+    }
+  } catch (e) {}
 
   // Hook up WebRTC state changes to CallStore
   webrtc.on('state_change', (state) => {

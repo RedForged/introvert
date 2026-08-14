@@ -180,6 +180,11 @@ class ConfigManager {
     this.theme = theme;
     await storage.set('theme', theme);
     document.documentElement.setAttribute('data-theme', theme);
+    try {
+      if (window.AndroidBridge?.updateTheme) {
+        window.AndroidBridge.updateTheme(theme === 'light');
+      }
+    } catch (e) {}
     this.notify();
   }
 

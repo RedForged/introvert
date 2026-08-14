@@ -34,78 +34,8 @@ jobs:
       - name: Run verification tests
         run: npm test
 
-  build-desktop:
-    name: Build Desktop (${{ matrix.platform }})
-    needs: test
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: 'macos-universal'
-            os: macos-latest
-            args: '--target universal-apple-darwin'
-            target: 'aarch64-apple-darwin x86_64-apple-darwin'
-
-          - platform: 'linux-x86_64'
-            os: ubuntu-22.04
-            args: ''
-            target: 'x86_64-unknown-linux-gnu'
-
-          - platform: 'windows-x86_64'
-            os: windows-latest
-            args: ''
-            target: 'x86_64-pc-windows-msvc'
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: 'npm'
-
-      - name: Install Rust Stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Rust Targets
-        run: rustup target add ${{ matrix.target }}
-
-      - name: Install Linux system dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
-
-      - name: Install npm dependencies
-        run: npm ci || npm install
-
-      - name: Build Tauri Application & Release
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ startsWith(github.ref, 'refs/tags/v') && 'v__VERSION__' || '' }}
-          releaseName: 'RedForged/introvert v__VERSION__'
-          releaseBody: 'Introvert automated cross-platform release with end-to-end encrypted direct messaging, rooms, and WebRTC calls.'
-          releaseDraft: true
-          prerelease: false
-          args: ${{ matrix.args }}
-
-      - name: Upload Desktop Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: introvert-${{ matrix.platform }}
-          path: |
-            src-tauri/target/release/bundle/
-            src-tauri/target/universal-apple-darwin/release/bundle/
-            src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/
-            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/
-          if-no-files-found: ignore
-
   build-android:
-    name: Build Android APK
+    name: Build & Sign Android APK
     needs: test
     runs-on: ubuntu-latest
     steps:
@@ -123,7 +53,7 @@ jobs:
       - name: Install Android Platform & NDK
         run: |
           yes | sdkmanager --licenses || true
-          sdkmanager "platforms;android-34" "platforms;android-35" "build-tools;34.0.0" "ndk;27.0.12077973" || true
+          sdkmanager "platforms;android-34" "platforms;android-35" "platforms;android-36" "build-tools;34.0.0" "ndk;27.0.12077973" || true
           NDK_DIR="$ANDROID_HOME/ndk/27.0.12077973"
           if [ ! -d "$NDK_DIR" ]; then
             NDK_DIR=$(ls -d $ANDROID_HOME/ndk/* 2>/dev/null | sort -V | tail -n 1)
@@ -153,21 +83,46 @@ jobs:
         run: |
           npx @tauri-apps/cli android init --ci --skip-targets-install
 
-      - name: Allow loopback cleartext for the in-app OAuth callback
+      - name: Configure Android Native Customizations
         run: |
-          # gen/android is generated + gitignored, so re-apply the network
-          # security config (cleartext allowed ONLY for localhost/127.0.0.1 —
-          # the in-app OAuth flow returns to http://localhost:1420 where the
-          # native listener captures the authorization code).
           mkdir -p src-tauri/gen/android/app/src/main/res/xml
+          mkdir -p src-tauri/gen/android/app/src/main/res/values
+          mkdir -p src-tauri/gen/android/app/src/main/res/values-night
+          mkdir -p src-tauri/gen/android/app/src/main/java/eu/redforged/introvert
+
           cp scripts/android/network_security_config.xml src-tauri/gen/android/app/src/main/res/xml/network_security_config.xml
+          cp scripts/android/MainActivity.kt src-tauri/gen/android/app/src/main/java/eu/redforged/introvert/MainActivity.kt
+          cp scripts/android/themes.xml src-tauri/gen/android/app/src/main/res/values/themes.xml
+          cp scripts/android/themes-night.xml src-tauri/gen/android/app/src/main/res/values-night/themes.xml
+          cp scripts/android/build.gradle.kts src-tauri/gen/android/app/build.gradle.kts
+
           sed -i 's|android:usesCleartextTraffic="${usesCleartextTraffic}"|android:networkSecurityConfig="@xml/network_security_config"|' src-tauri/gen/android/app/src/main/AndroidManifest.xml
+          sed -i 's|android:name=".MainActivity"|android:name=".MainActivity" android:windowSoftInputMode="adjustResize"|' src-tauri/gen/android/app/src/main/AndroidManifest.xml
           grep -q networkSecurityConfig src-tauri/gen/android/app/src/main/AndroidManifest.xml
 
       - name: Build Android APK
         run: |
           npx @tauri-apps/cli android build --apk --ci --debug
           npx @tauri-apps/cli android build --apk --ci || true
+
+      - name: Sign Android APKs with apksigner
+        run: |
+          KEYSTORE_DIR="$HOME/.android"
+          KEYSTORE_FILE="$KEYSTORE_DIR/debug.keystore"
+          mkdir -p "$KEYSTORE_DIR"
+          if [ ! -f "$KEYSTORE_FILE" ]; then
+            keytool -genkey -v -keystore "$KEYSTORE_FILE" -alias androiddebugkey -storepass android -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
+          APKSIGNER=$(find $ANDROID_HOME/build-tools -name apksigner | sort -V | tail -n 1)
+          echo "Using apksigner at: $APKSIGNER"
+
+          for apk in $(find src-tauri/gen/android/app/build/outputs/apk -name "*.apk" ! -name "*-unaligned.apk"); do
+            echo "--- Signing $apk ---"
+            $APKSIGNER sign --ks "$KEYSTORE_FILE" --ks-pass pass:android --key-pass pass:android "$apk" || true
+            echo "--- Verifying $apk ---"
+            $APKSIGNER verify -v "$apk" || true
+          done
 
       - name: Upload Android APK Artifact
         uses: actions/upload-artifact@v4
@@ -182,6 +137,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          name: 'Introvert ${{ github.ref_name }}'
+          body: 'Introvert automated release featuring dynamic edge-to-edge Android system bar safe-area integration and signed APKs.'
           files: |
             src-tauri/gen/android/app/build/outputs/apk/**/*.apk
-          draft: true
+          draft: false
+          prerelease: false
