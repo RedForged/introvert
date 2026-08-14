@@ -70,8 +70,8 @@ jobs:
       - name: Install Rust Stable
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install Rust Android Targets
-        run: rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
+      - name: Install Rust Android Targets (phone arch only)
+        run: rustup target add aarch64-linux-android
 
       - name: Install npm dependencies
         run: npm ci || npm install
@@ -100,10 +100,9 @@ jobs:
           sed -i 's|android:name=".MainActivity"|android:name=".MainActivity" android:windowSoftInputMode="adjustResize"|' src-tauri/gen/android/app/src/main/AndroidManifest.xml
           grep -q networkSecurityConfig src-tauri/gen/android/app/src/main/AndroidManifest.xml
 
-      - name: Build Android APK
+      - name: Build Android APK (phone arch only)
         run: |
-          npx @tauri-apps/cli android build --apk --ci --debug
-          npx @tauri-apps/cli android build --apk --ci || true
+          npx @tauri-apps/cli android build --apk --ci
 
       - name: Sign Android APKs with apksigner
         run: |
@@ -138,7 +137,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           name: 'Introvert ${{ github.ref_name }}'
-          body: 'Introvert automated release featuring dynamic edge-to-edge Android system bar safe-area integration and signed APKs.'
+          body: 'Introvert automated release: bundled Call/Video menu, Chat Settings with Re-Key in the peer profile, arm64 (phone) Android build and universal macOS DMG.'
           files: |
             src-tauri/gen/android/app/build/outputs/apk/**/*.apk
           draft: false
