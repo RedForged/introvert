@@ -180,7 +180,8 @@ export async function initAppStores() {
       };
 
       // Cache the plaintext so reopening the chat never re-runs crypto on an
-      // already-consumed message key.
+      // already-consumed message key. Store the UNWRAPPED envelope so the
+      // cache matches the history-fetch shape regardless of WS wrapping.
       if (typeof plain === 'string' && !plain.startsWith('[Unable to decrypt')) {
         cryptoEngine.securePersistMessage(otherIdStr, {
           id: dmEvent.message.id,
@@ -189,7 +190,7 @@ export async function initAppStores() {
           edited_at: null,
           proto: 'olm',
           plaintext: plain,
-          cipher: dmEvent.message.body,
+          cipher: cryptoEngine.unwrapEnvelope(dmEvent.message.body),
           own: false,
         }).catch(() => {});
       }

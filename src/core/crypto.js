@@ -861,11 +861,32 @@ class CryptoEngine {
     });
   }
 
+  // The WebSocket live events occasionally wrap the envelope:
+  // body = '{"body":"{...envelope...}"}'. Normalize every caller shape
+  // (history fetch, live event, cache records) to one canonical string so
+  // cache comparisons never miss due to formatting differences.
+  unwrapEnvelope(body) {
+    if (typeof body !== 'string') return body;
+    const t = body.trim();
+    if (!t.startsWith('{')) return body;
+    try {
+      const parsed = JSON.parse(t);
+      if (parsed && typeof parsed === 'object' && typeof parsed.body === 'string' && parsed.body.trim().startsWith('{')) {
+        return JSON.stringify(JSON.parse(parsed.body));
+      }
+      return JSON.stringify(parsed);
+    } catch (e) {
+      return body;
+    }
+  }
+
   async decryptDm(msg, isOwn, otherIdStr, peerCurveKey) {
     if (!msg || !msg.body) return '';
     if (typeof msg.body === 'string' && msg.body.startsWith('/uploads/stickers/')) {
       return msg.body;
     }
+    // Normalize the body shape (live WS events may wrap the envelope).
+    msg = { ...msg, body: this.unwrapEnvelope(msg.body) };
 
     if (!this.account) {
       try { await this.ensureReady(); } catch (e) {}
@@ -954,15 +975,10 @@ class CryptoEngine {
             } catch (_) {}
           }
         } catch (_) {}
-        // Self-session is broken/desynced: discard it so the next message
-        // re-initializes a fresh pair (future own messages decrypt again).
-        if (this.selfInbound || this.selfOutbound) {
-          await this.idbDelete(STORE_OLM, 'selfInbound');
-          await this.idbDelete(STORE_OLM, 'selfOutbound');
-          this.selfInbound = null;
-          this.selfOutbound = null;
-          this.selfInboundBaseline = null;
-        }
+        // NOTE: never discard the stored self-session pair here — the pair's
+        // ratchet must stay continuous for the device's own message history.
+        // Display of undecryptable records is handled by the plaintext cache
+        // in ChatView (which stores every successfully decrypted plaintext).
         return '[Unable to decrypt — encrypted for previous session]';
       });
     }

@@ -102,7 +102,7 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
 
         if (isOlm) {
           const cached = cachedMap.get(String(m.id));
-          if (cached && (cached.cipher === undefined || cached.cipher === m.body)) {
+          if (cached && (cached.cipher === undefined || cryptoEngine.unwrapEnvelope(cached.cipher) === cryptoEngine.unwrapEnvelope(m.body))) {
             decrypted.push({ ...m, body: cached.plaintext, is_own: isOwn, decrypted: true });
             continue;
           }
@@ -110,7 +110,8 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
             const plain = await cryptoEngine.decryptDm(m, isOwn, otherIdStr, curveKey);
             const failed = typeof plain === 'string' && plain.startsWith('[Unable to decrypt');
             if (!failed) {
-              cachedMap.set(String(m.id), { plaintext: plain, cipher: m.body });
+              const cipherNorm = cryptoEngine.unwrapEnvelope(m.body);
+              cachedMap.set(String(m.id), { plaintext: plain, cipher: cipherNorm });
               cryptoEngine.securePersistMessage(otherIdStr, {
                 id: m.id,
                 from_id: isOwn ? currentUserId : senderId,
@@ -118,7 +119,7 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
                 edited_at: m.edited_at || null,
                 proto: 'olm',
                 plaintext: plain,
-                cipher: m.body,
+                cipher: cipherNorm,
                 own: isOwn,
               }).catch(() => {});
             }
