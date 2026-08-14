@@ -4,9 +4,10 @@
 import { authStore, presenceStore, showToast } from '../../core/state.js';
 import { config } from '../../core/config.js';
 import { api } from '../../core/api.js';
+import { cryptoEngine } from '../../core/crypto.js';
 import { webrtc } from '../../core/webrtc.js';
 
-export function createProfileModal({ user, onClose, onStartChat, onLogout }) {
+export function createProfileModal({ user, onClose, onStartChat, onLogout, onRekey }) {
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
 
@@ -101,18 +102,53 @@ export function createProfileModal({ user, onClose, onStartChat, onLogout }) {
                     <span>Message</span>
                   </button>
 
-                  <button class="btn-pill" id="profile-call-btn" style="height:38px;" title="Voice Call">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
-                    </svg>
-                  </button>
+                  <div class="call-bundle" id="profile-call-bundle">
+                    <button class="btn-pill" id="profile-call-bundle-btn" style="height:38px; padding:0 14px;" title="Call">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
+                      </svg>
+                      <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="6 9 12 15 18 9"></polyline>
+                      </svg>
+                    </button>
+                    <div class="call-menu">
+                      <button class="call-menu-item" id="profile-voice-call-opt">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
+                        </svg>
+                        <span>Voice Call</span>
+                      </button>
+                      <button class="call-menu-item" id="profile-video-call-opt">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                          <polygon points="23 7 16 12 23 17 23 7"></polygon>
+                          <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+                        </svg>
+                        <span>Video Call</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
 
-                  <button class="btn-pill" id="profile-video-btn" style="height:38px;" title="Video Call">
+                <div class="chat-settings-section">
+                  <div class="chat-settings-title">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <polygon points="23 7 16 12 23 17 23 7"></polygon>
-                      <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+                      <circle cx="12" cy="12" r="3"></circle>
+                      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
                     </svg>
-                  </button>
+                    <span>Chat Settings</span>
+                  </div>
+                  <div class="chat-settings-row">
+                    <div class="chat-settings-info">
+                      <div class="chat-settings-label">Encryption keys</div>
+                      <div class="chat-settings-desc">Reset the Olm session with @${escapeHtml(user.username)} to establish fresh end-to-end encryption keys.</div>
+                    </div>
+                    <button class="btn-pill" id="chat-rekey-btn" title="Reset and re-establish fresh encryption keys with this peer">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path>
+                      </svg>
+                      <span>Re-Key</span>
+                    </button>
+                  </div>
                 </div>
               `
                   : `
@@ -167,6 +203,11 @@ export function createProfileModal({ user, onClose, onStartChat, onLogout }) {
       if (e.target === overlay) {
         overlay.remove();
         if (onClose) onClose();
+        return;
+      }
+      const callBundle = overlay.querySelector('#profile-call-bundle');
+      if (callBundle && e.target instanceof Element && !e.target.closest('#profile-call-bundle')) {
+        callBundle.classList.remove('open');
       }
     });
 
@@ -175,13 +216,35 @@ export function createProfileModal({ user, onClose, onStartChat, onLogout }) {
         overlay.remove();
         if (onStartChat) onStartChat(user.username);
       });
-      overlay.querySelector('#profile-call-btn')?.addEventListener('click', () => {
+
+      overlay.querySelector('#profile-call-bundle-btn')?.addEventListener('click', () => {
+        overlay.querySelector('#profile-call-bundle')?.classList.toggle('open');
+      });
+
+      overlay.querySelector('#profile-voice-call-opt')?.addEventListener('click', () => {
         overlay.remove();
+        if (onClose) onClose();
         webrtc.startCall(user.username, false);
       });
-      overlay.querySelector('#profile-video-btn')?.addEventListener('click', () => {
+
+      overlay.querySelector('#profile-video-call-opt')?.addEventListener('click', () => {
         overlay.remove();
+        if (onClose) onClose();
         webrtc.startCall(user.username, true);
+      });
+
+      overlay.querySelector('#chat-rekey-btn')?.addEventListener('click', async (e) => {
+        const btn = e.currentTarget;
+        btn.disabled = true;
+        showToast('info', 'Re-initializing encryption sessions...');
+        try {
+          await cryptoEngine.repairSessions(String(user.id || user.user_id || user.username || ''));
+          showToast('success', 'Encryption keys reset. Next message will establish a fresh PreKey session.');
+          if (onRekey) onRekey(user.username);
+        } catch (err) {
+          showToast('danger', 'Failed to reset encryption keys', err.message);
+        }
+        btn.disabled = false;
       });
     }
 

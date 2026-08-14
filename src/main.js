@@ -93,6 +93,24 @@ async function bootstrap() {
   let activeTab = 'chats'; // 'chats' | 'rooms' | 'contacts' | 'call'
   let authModalInstance = null;
 
+  // Opens a peer's profile, wiring its Chat Settings (Re-Key) back into the open chat view
+  const openPeerProfile = (user) => {
+    createProfileModal({
+      user,
+      onStartChat: (username) => {
+        activeTab = 'chats';
+        updateLayout();
+        chatStore.set({ activeConversation: username });
+      },
+      onRekey: (username) => {
+        const active = chatStore.get().activeConversation;
+        if (active && String(active).toLowerCase() === String(username || '').toLowerCase()) {
+          chatView.loadConversation(username);
+        }
+      },
+    });
+  };
+
   const appContainer = document.createElement('div');
   appContainer.className = 'app-container';
 
@@ -101,14 +119,7 @@ async function bootstrap() {
     onBack: () => {
       chatStore.set({ activeConversation: null });
     },
-    onOpenProfile: (user) => {
-      createProfileModal({
-        user,
-        onStartChat: (username) => {
-          chatStore.set({ activeConversation: username });
-        },
-      });
-    },
+    onOpenProfile: openPeerProfile,
     onOpenSafetyModal: (username) => {
       createSafetyModal({ username });
     },
@@ -118,16 +129,7 @@ async function bootstrap() {
     onBack: () => {
       roomStore.set({ activeRoom: null, activeChannel: null });
     },
-    onOpenProfile: (user) => {
-      createProfileModal({
-        user,
-        onStartChat: (username) => {
-          activeTab = 'chats';
-          updateLayout();
-          chatStore.set({ activeConversation: username });
-        },
-      });
-    },
+    onOpenProfile: openPeerProfile,
     onCreateChannel: (roomId) => {
       createCreateChannelModal({
         roomId,
@@ -169,16 +171,7 @@ async function bootstrap() {
       updateLayout();
       chatStore.set({ activeConversation: username });
     },
-    onOpenProfile: (user) => {
-      createProfileModal({
-        user,
-        onStartChat: (username) => {
-          activeTab = 'chats';
-          updateLayout();
-          chatStore.set({ activeConversation: username });
-        },
-      });
-    },
+    onOpenProfile: openPeerProfile,
   });
 
   const performLogout = async () => {

@@ -382,12 +382,32 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
         </div>
 
         <div class="stage-header-actions">
-          <button class="btn-pill" id="rekey-btn" title="Reset and re-establish fresh encryption keys with this peer">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path>
-            </svg>
-            <span>Re-Key</span>
-          </button>
+          <div class="call-bundle" id="call-bundle">
+            <button class="btn-pill primary" id="call-bundle-btn" title="Call">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
+              </svg>
+              <span>Call</span>
+              <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="6 9 12 15 18 9"></polyline>
+              </svg>
+            </button>
+            <div class="call-menu">
+              <button class="call-menu-item" id="voice-call-option">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
+                </svg>
+                <span>Voice Call</span>
+              </button>
+              <button class="call-menu-item" id="video-call-option">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polygon points="23 7 16 12 23 17 23 7"></polygon>
+                  <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+                </svg>
+                <span>Video Call</span>
+              </button>
+            </div>
+          </div>
 
           <button class="btn-pill" id="safety-keys-btn" title="Verify Safety Numbers">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -395,21 +415,6 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
               <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
             </svg>
             <span>Safety</span>
-          </button>
-
-          <button class="btn-pill primary" id="voice-call-btn" title="Voice Call">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
-            </svg>
-            <span>Call</span>
-          </button>
-
-          <button class="btn-pill" id="video-call-btn" title="Video Call">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polygon points="23 7 16 12 23 17 23 7"></polygon>
-              <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
-            </svg>
-            <span>Video</span>
           </button>
         </div>
       </div>
@@ -462,31 +467,29 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
       return;
     }
 
-    const rekeyBtn = e.target.closest('#rekey-btn');
-    if (rekeyBtn) {
-      const otherIdStr = String(activePeer?.id || '');
-      showToast('info', 'Re-initializing encryption sessions...');
-      await cryptoEngine.repairSessions(otherIdStr);
-      showToast('success', 'Encryption keys reset. Next message will establish a fresh PreKey session.');
-      if (currentUsername) loadConversation(currentUsername);
+    const callBundleBtn = e.target.closest('#call-bundle-btn');
+    if (callBundleBtn) {
+      container.querySelector('#call-bundle')?.classList.toggle('open');
+      return;
+    }
+
+    const voiceCallOpt = e.target.closest('#voice-call-option');
+    if (voiceCallOpt) {
+      container.querySelector('#call-bundle')?.classList.remove('open');
+      if (currentUsername) webrtc.startCall(currentUsername, false);
+      return;
+    }
+
+    const videoCallOpt = e.target.closest('#video-call-option');
+    if (videoCallOpt) {
+      container.querySelector('#call-bundle')?.classList.remove('open');
+      if (currentUsername) webrtc.startCall(currentUsername, true);
       return;
     }
 
     const safetyBtn = e.target.closest('#safety-keys-btn');
     if (safetyBtn) {
       if (onOpenSafetyModal && currentUsername) onOpenSafetyModal(currentUsername);
-      return;
-    }
-
-    const voiceCallBtn = e.target.closest('#voice-call-btn');
-    if (voiceCallBtn) {
-      if (currentUsername) webrtc.startCall(currentUsername, false);
-      return;
-    }
-
-    const videoCallBtn = e.target.closest('#video-call-btn');
-    if (videoCallBtn) {
-      if (currentUsername) webrtc.startCall(currentUsername, true);
       return;
     }
 
@@ -585,6 +588,14 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
       if (dot) {
         dot.className = `presence-dot ${inCall ? 'in-call' : isOnline ? 'online' : ''}`;
       }
+    }
+  });
+
+  // Close the bundled call menu when clicking anywhere outside it
+  document.addEventListener('click', (e) => {
+    const bundle = container.querySelector('#call-bundle');
+    if (bundle && e.target instanceof Element && !e.target.closest('#call-bundle')) {
+      bundle.classList.remove('open');
     }
   });
 

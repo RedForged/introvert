@@ -686,6 +686,67 @@ input, textarea, [contenteditable="true"] {
   color: #ffffff;
 }
 
+/* Bundled Call dropdown */
+
+.call-bundle {
+  position: relative;
+  display: inline-flex;
+}
+
+.call-bundle .chev {
+  width: 11px;
+  height: 11px;
+  opacity: 0.8;
+}
+
+.call-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 176px;
+  padding: 5px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  display: none;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 80;
+  animation: fadeIn 0.15s ease;
+}
+
+.call-bundle.open .call-menu {
+  display: flex;
+}
+
+.call-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-main);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s ease;
+}
+
+.call-menu-item:hover {
+  background: var(--bg-hover);
+}
+
+.call-menu-item svg {
+  width: 15px;
+  height: 15px;
+  color: var(--text-muted);
+}
+
 /* Message Stream */
 
 .message-stream {
@@ -1220,6 +1281,62 @@ input, textarea, [contenteditable="true"] {
   width: 100%;
   text-align: left;
   white-space: pre-wrap;
+}
+
+/* Chat Settings (in the chat receiver's profile) */
+
+.chat-settings-section {
+  margin-top: 2px;
+  width: 100%;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-canvas);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.chat-settings-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.chat-settings-title svg {
+  width: 13px;
+  height: 13px;
+}
+
+.chat-settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.chat-settings-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.chat-settings-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.chat-settings-desc {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  line-height: 1.45;
 }
 
 /* Toasts */
