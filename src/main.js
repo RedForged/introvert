@@ -106,7 +106,6 @@ async function bootstrap() {
         user,
         onStartChat: (username) => {
           chatStore.set({ activeConversation: username });
-          chatView.loadConversation(username);
         },
       });
     },
@@ -126,7 +125,6 @@ async function bootstrap() {
           activeTab = 'chats';
           updateLayout();
           chatStore.set({ activeConversation: username });
-          chatView.loadConversation(username);
         },
       });
     },
@@ -143,13 +141,11 @@ async function bootstrap() {
   const chatList = createChatList({
     onSelectConversation: (username) => {
       chatStore.set({ activeConversation: username });
-      chatView.loadConversation(username);
     },
     onStartNewDm: () => {
       createNewChatModal({
         onSelectUser: (username) => {
           chatStore.set({ activeConversation: username });
-          chatView.loadConversation(username);
         },
       });
     },
@@ -172,7 +168,6 @@ async function bootstrap() {
       activeTab = 'chats';
       updateLayout();
       chatStore.set({ activeConversation: username });
-      chatView.loadConversation(username);
     },
     onOpenProfile: (user) => {
       createProfileModal({
@@ -181,7 +176,6 @@ async function bootstrap() {
           activeTab = 'chats';
           updateLayout();
           chatStore.set({ activeConversation: username });
-          chatView.loadConversation(username);
         },
       });
     },
@@ -308,7 +302,6 @@ async function bootstrap() {
       createNewChatModal({
         onSelectUser: (username) => {
           chatStore.set({ activeConversation: username });
-          chatView.loadConversation(username);
         },
       });
     }
@@ -317,7 +310,6 @@ async function bootstrap() {
       createNewChatModal({
         onSelectUser: (username) => {
           chatStore.set({ activeConversation: username });
-          chatView.loadConversation(username);
         },
       });
     }

@@ -3,6 +3,7 @@
 import { config } from './config.js';
 import { api } from './api.js';
 import { cryptoEngine } from './crypto.js';
+import { loadCacheMap, resolveCachedPlaintext } from './messageCache.js';
 import { signaling } from './signaling.js';
 import { webrtc } from './webrtc.js';
 
@@ -221,7 +222,7 @@ export async function initAppStores() {
       // already-consumed message key. Store the UNWRAPPED envelope so the
       // cache matches the history-fetch shape regardless of WS wrapping.
       if (typeof plain === 'string' && !plain.startsWith('[Unable to decrypt')) {
-        cryptoEngine.securePersistMessage(otherIdStr, {
+        const liveRecord = {
           id: dmEvent.message.id,
           from_id: msgFromId,
           created_at: dmEvent.message.created_at || Date.now(),
@@ -230,7 +231,9 @@ export async function initAppStores() {
           plaintext: plain,
           cipher: cryptoEngine.unwrapEnvelope(dmEvent.message.body),
           own: isOwn,
-        }).catch(() => {});
+        };
+        if (otherIdStr) cryptoEngine.securePersistMessage(otherIdStr, liveRecord).catch(() => {});
+        if (targetUser && targetUser !== otherIdStr) cryptoEngine.securePersistMessage(targetUser, liveRecord).catch(() => {});
       }
 
       const msgs = chatStore.get().messages[targetUser] || [];
@@ -266,9 +269,16 @@ export async function initAppStores() {
       updated[u] = (current[u] || []).filter((m) => String(m.id) !== mid);
     }
     chatStore.set({ messages: updated });
-    const activePeer = chatStore.get().activePeer;
-    if (activePeer && activePeer.id) {
-      cryptoEngine.secureDeleteMessage(String(activePeer.id), mid).catch(() => {});
+
+    // Also remove the message from the local secure cache. chatStore.activePeer
+    // is never populated, so derive the peer from the conversation list and
+    // delete under BOTH namespaces.
+    const conv = (chatStore.get().conversations || []).find(
+      (c) => c.username && c.username.toLowerCase() === String(fromUser || '').toLowerCase()
+    );
+    if (conv) {
+      if (conv.id) cryptoEngine.secureDeleteMessage(String(conv.id), mid).catch(() => {});
+      if (conv.username) cryptoEngine.secureDeleteMessage(conv.username, mid).catch(() => {});
     }
     refreshConversationsList();
   });
@@ -314,7 +324,7 @@ export function startLivePolling() {
     if (activeConv) {
       syncActiveConversation(activeConv).catch(() => {});
     }
-  }, 2500);
+  }, 15000);
 }
 
 export function stopLivePolling() {
@@ -347,20 +357,8 @@ export async function syncActiveConversation(username) {
       (c) => c.username && c.username.toLowerCase() === username.toLowerCase()
     ) || { username };
 
-    const cacheKeys = [peerId, String(username || '')].filter(Boolean);
-    const cachedMap = new Map();
-    const cachedByCipher = new Map();
-    try {
-      for (const ck of cacheKeys) {
-        const cachedRecs = await cryptoEngine.secureLoadMessages(ck);
-        for (const r of cachedRecs || []) {
-          if (r && r.plaintext !== undefined) {
-            if (r.id !== undefined) cachedMap.set(String(r.id), r);
-            if (r.cipher) cachedByCipher.set(cryptoEngine.unwrapEnvelope(r.cipher), r);
-          }
-        }
-      }
-    } catch (_) {}
+    const peerId = String(activePeer.id || (ordered[0] && (String(ordered[0].from_id) === currentUserId ? ordered[0].to_id : ordered[0].from_id)) || '');
+    const cache = await loadCacheMap(cryptoEngine, [peerId, username]);
 
     const decrypted = [];
     for (const m of ordered) {
@@ -379,9 +377,9 @@ export async function syncActiveConversation(username) {
 
       if (isOlm) {
         const cipherNorm = cryptoEngine.unwrapEnvelope(m.body);
-        const cached = cachedMap.get(String(m.id)) || (cipherNorm ? cachedByCipher.get(cipherNorm) : null);
-        if (cached && cached.plaintext !== undefined && (cached.cipher === undefined || cryptoEngine.unwrapEnvelope(cached.cipher) === cipherNorm)) {
-          decrypted.push({ ...m, body: cached.plaintext, is_own: isOwn, decrypted: true });
+        const cachedPlain = resolveCachedPlaintext(cache, m.id, cipherNorm, (cipher) => cryptoEngine.unwrapEnvelope(cipher));
+        if (cachedPlain !== null) {
+          decrypted.push({ ...m, body: cachedPlain, is_own: isOwn, decrypted: true });
           continue;
         }
         try {
@@ -427,7 +425,6 @@ export async function syncActiveConversation(username) {
           [username]: deduped,
         },
       });
-      refreshConversationsList();
     }
   } catch (err) {
     // Non-fatal background sync error
@@ -439,7 +436,6 @@ export async function syncActiveConversation(username) {
 export async function refreshConversationsList() {
   try {
     const list = await api.getConversations();
-    const currentUserId = String(config.currentUser?.id || '');
 
     const convs = await Promise.all(
       (Array.isArray(list) ? list : []).map(async (c) => {
@@ -447,7 +443,6 @@ export async function refreshConversationsList() {
         const username = c.username || (c.account && c.account.username) || '';
         const displayName = c.display_name || (c.account && c.account.display_name) || username;
         const avatar = c.avatar || (c.account && c.account.avatar);
-        const curveKey = c.sender_curve || c.curve25519_key || (c.account && c.account.curve25519_key);
 
         let preview = '';
         if (c.last_message) {
@@ -460,47 +455,20 @@ export async function refreshConversationsList() {
                 sender_ciphertext: c.last_sender_ciphertext,
                 from_id: c.last_from,
               };
-              const isOwn = String(c.last_from || msgObj.from_id || msgObj.user_id) === currentUserId;
-
-              // Check plaintext cache first to avoid consuming Olm ratchet state
-              let cachedPlain = null;
-              try {
-                const cachedRecs = await cryptoEngine.secureLoadMessages(peerId);
-                const rawNorm = cryptoEngine.unwrapEnvelope(msgObj.body);
-                for (const r of cachedRecs || []) {
-                  if (r && r.plaintext !== undefined) {
-                    if (msgObj.id && String(r.id) === String(msgObj.id)) {
-                      cachedPlain = r.plaintext;
-                      break;
-                    }
-                    if (r.cipher && cryptoEngine.unwrapEnvelope(r.cipher) === rawNorm) {
-                      cachedPlain = r.plaintext;
-                      break;
-                    }
-                  }
-                }
-              } catch (_) {}
-
-              if (cachedPlain !== null) {
-                preview = cachedPlain;
-              } else {
-                preview = await cryptoEngine.decryptDm(msgObj, isOwn, peerId, curveKey);
-                if (typeof preview === 'string' && !preview.startsWith('[Unable to decrypt')) {
-                  const cipherNorm = cryptoEngine.unwrapEnvelope(msgObj.body);
-                  const record = {
-                    id: msgObj.id || Date.now(),
-                    from_id: isOwn ? currentUserId : String(msgObj.from_id || peerId),
-                    created_at: c.last_at || Date.now(),
-                    edited_at: null,
-                    proto: 'olm',
-                    plaintext: preview,
-                    cipher: cipherNorm,
-                    own: isOwn,
-                  };
-                  if (peerId) cryptoEngine.securePersistMessage(peerId, record).catch(() => {});
-                  if (username && username !== peerId) cryptoEngine.securePersistMessage(username, record).catch(() => {});
-                }
-              }
+              // Preview must NEVER run Olm: decrypting here consumes one-time
+              // keys and advances the double ratchet out of order (latest-first)
+              // while ChatView decrypts oldest-first. Read the plaintext cache
+              // only, across both namespaces, and fall back to a placeholder
+              // when nothing has been decrypted yet.
+              const cache = await loadCacheMap(cryptoEngine, [peerId, username]);
+              const rawNorm = cryptoEngine.unwrapEnvelope(msgObj.body);
+              const cachedPlain = resolveCachedPlaintext(
+                cache,
+                msgObj.id,
+                rawNorm,
+                (cipher) => cryptoEngine.unwrapEnvelope(cipher)
+              );
+              preview = cachedPlain !== null ? cachedPlain : '🔒 [Encrypted Message]';
             } catch (e) {
               preview = '🔒 [Encrypted Message]';
             }

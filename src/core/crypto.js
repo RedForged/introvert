@@ -1026,6 +1026,7 @@ class CryptoEngine {
     const plain = await this._decryptDmInternal(msg, isOwn, otherIdStr, peerCurveKey);
     if (typeof plain === 'string' && !plain.startsWith('[Unable to decrypt')) {
       if (this.decryptedCiphertexts) {
+        if (this.decryptedCiphertexts.size >= 10000) this.decryptedCiphertexts.clear();
         this.decryptedCiphertexts.set(normBody, plain);
       }
     }

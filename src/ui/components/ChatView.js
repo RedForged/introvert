@@ -2,6 +2,7 @@ import { chatStore, authStore, presenceStore, showToast, refreshConversationsLis
 import { config } from '../../core/config.js';
 import { api } from '../../core/api.js';
 import { cryptoEngine } from '../../core/crypto.js';
+import { loadCacheMap, resolveCachedPlaintext } from '../../core/messageCache.js';
 import { webrtc } from '../../core/webrtc.js';
 import { createRestoreBackupModal } from './RestoreBackupModal.js';
 
@@ -14,9 +15,11 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
   let messages = [];
   let isSending = false;
   let isSecureMode = false;
+  let loadSeq = 0;
 
   const loadConversation = async (username) => {
     if (!username) return;
+    const seq = ++loadSeq;
     currentUsername = username;
     container.classList.add('mobile-active');
 
@@ -31,6 +34,7 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
 
     try {
       const searchRes = await api.searchAccounts(username);
+      if (seq !== loadSeq) return;
       const exact = searchRes.find(
         (a) => a.username && a.username.toLowerCase() === username.toLowerCase()
       );
@@ -44,6 +48,7 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
     // 2. Fetch history
     try {
       const history = await api.getConversationHistory(username);
+      if (seq !== loadSeq) return;
       const rawMessages = history.messages || [];
       const currentUserId = String(config.currentUser?.id || '');
 
@@ -74,20 +79,7 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
       // re-opening a chat never has to re-run crypto for old messages. The
       // cached record keeps the original ciphertext so an EDITED message
       // (same id, new body) is re-decrypted instead of showing stale text.
-      const cacheKeys = [String(activePeer.id || ''), String(username || '')].filter(Boolean);
-      const cachedMap = new Map();
-      const cachedByCipher = new Map();
-      try {
-        for (const ck of cacheKeys) {
-          const cachedRecs = await cryptoEngine.secureLoadMessages(ck);
-          for (const r of cachedRecs || []) {
-            if (r && r.plaintext !== undefined) {
-              if (r.id !== undefined) cachedMap.set(String(r.id), r);
-              if (r.cipher) cachedByCipher.set(cryptoEngine.unwrapEnvelope(r.cipher), r);
-            }
-          }
-        }
-      } catch (e) {}
+      const cache = await loadCacheMap(cryptoEngine, [String(activePeer.id || ''), String(username || '')]);
 
       const decrypted = [];
       for (const m of ordered) {
@@ -106,9 +98,9 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
 
         if (isOlm) {
           const cipherNorm = cryptoEngine.unwrapEnvelope(m.body);
-          const cached = cachedMap.get(String(m.id)) || (cipherNorm ? cachedByCipher.get(cipherNorm) : null);
-          if (cached && cached.plaintext !== undefined && (cached.cipher === undefined || cryptoEngine.unwrapEnvelope(cached.cipher) === cipherNorm)) {
-            decrypted.push({ ...m, body: cached.plaintext, is_own: isOwn, decrypted: true });
+          const cachedPlain = resolveCachedPlaintext(cache, m.id, cipherNorm, (cipher) => cryptoEngine.unwrapEnvelope(cipher));
+          if (cachedPlain !== null) {
+            decrypted.push({ ...m, body: cachedPlain, is_own: isOwn, decrypted: true });
             continue;
           }
           try {
@@ -116,9 +108,7 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
             const failed = typeof plain === 'string' && plain.startsWith('[Unable to decrypt');
             if (!failed) {
               const cipherNorm = cryptoEngine.unwrapEnvelope(m.body);
-              cachedMap.set(String(m.id), { plaintext: plain, cipher: cipherNorm });
-              if (cipherNorm) cachedByCipher.set(cipherNorm, { plaintext: plain, cipher: cipherNorm });
-              cryptoEngine.securePersistMessage(otherIdStr, {
+              const record = {
                 id: m.id,
                 from_id: isOwn ? currentUserId : senderId,
                 created_at: m.created_at,
@@ -127,7 +117,9 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
                 plaintext: plain,
                 cipher: cipherNorm,
                 own: isOwn,
-              }).catch(() => {});
+              };
+              if (otherIdStr) cryptoEngine.securePersistMessage(otherIdStr, record).catch(() => {});
+              if (username && username !== otherIdStr) cryptoEngine.securePersistMessage(username, record).catch(() => {});
             }
             decrypted.push({ ...m, body: plain, is_own: isOwn, decrypted: !failed });
           } catch (err) {
@@ -135,14 +127,6 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
           }
         } else {
           decrypted.push({ ...m, is_own: isOwn, decrypted: true });
-        }
-      }
-
-      // Clean up cached messages that were deleted on the server (non-secure mode)
-      const serverMsgIds = new Set(ordered.map((m) => String(m.id)));
-      for (const [id] of cachedMap.entries()) {
-        if (!serverMsgIds.has(id)) {
-          cryptoEngine.secureDeleteMessage(cacheKey, id).catch(() => {});
         }
       }
 
@@ -155,6 +139,7 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
         }
       }
       decrypted.sort((a, b) => (a.created_at - b.created_at) || (Number(a.id) - Number(b.id)));
+      if (seq !== loadSeq) return;
       messages = decrypted;
 
       // Update store
@@ -224,7 +209,7 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
         },
       });
 
-      cryptoEngine.securePersistMessage(otherIdStr, {
+      const sentRecord = {
         id: newMsg.id,
         from_id: String(config.currentUser?.id || ''),
         created_at: newMsg.created_at,
@@ -233,7 +218,9 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
         plaintext: text,
         cipher: typeof encryptedPayload === 'object' ? JSON.stringify(encryptedPayload) : String(encryptedPayload),
         own: true,
-      }).catch(() => {});
+      };
+      if (otherIdStr) cryptoEngine.securePersistMessage(otherIdStr, sentRecord).catch(() => {});
+      if (currentUsername && currentUsername !== otherIdStr) cryptoEngine.securePersistMessage(currentUsername, sentRecord).catch(() => {});
 
       render();
       scrollToBottom();
