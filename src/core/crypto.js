@@ -681,9 +681,32 @@ class CryptoEngine {
 
   async getOrCreateDeviceOutboundSession(otherIdStr, deviceId, identityKey, fallbackKey, otk) {
     const fullKey = `${otherIdStr}:${deviceId}`;
-    if (this.sessions[fullKey]) return this.sessions[fullKey];
-    const existing = await this.loadSession(fullKey);
-    if (existing) return existing;
+
+    // Session healing: track which one-time key built this session. When the
+    // peer publishes a DIFFERENT fresh key (it re-publishes on every login —
+    // the implicit "reset my sessions" signal), discard the cached session and
+    // start a new one with the new key. Without this, a desynced ratchet is
+    // reused forever and the pair can never decrypt each other again.
+    const freshOtkId = otk ? (typeof otk === 'object' ? String(otk.id || '') : String(otk)) : '';
+
+    const cached = this.sessions[fullKey] || (await this.loadSession(fullKey));
+    if (cached) {
+      if (freshOtkId) {
+        const usedOtk = await this.idbGet(STORE_OLM, `sessionOtk:${fullKey}`);
+        if (usedOtk === null || usedOtk === undefined || String(usedOtk) === String(freshOtkId)) {
+          return cached;
+        }
+        // Peer rotated keys — drop the old ratchet and start fresh.
+        await this.idbDelete(STORE_OLM, `session:${fullKey}`);
+        await this.idbDelete(STORE_OLM, `sessionBase:${fullKey}`);
+        delete this.sessions[fullKey];
+        delete this.sessionBaselines[fullKey];
+      } else {
+        // Peer's pool is drained right now — keep the established session
+        // (fallback keys are only for brand-new sessions).
+        return cached;
+      }
+    }
 
     const theirOtk = otk ? (typeof otk === 'object' ? otk.public_key : otk) : fallbackKey;
     if (!identityKey || !theirOtk) return null;
@@ -693,6 +716,7 @@ class CryptoEngine {
 
     await this.saveSessionBaseline(fullKey, session);
     await this.saveSession(fullKey, session);
+    await this.idbSet(STORE_OLM, `sessionOtk:${fullKey}`, freshOtkId || 'fallback');
     await this.idbSet(STORE_OLM, `sessionIdent:${fullKey}`, identityKey);
     return session;
   }
@@ -846,6 +870,19 @@ class CryptoEngine {
                   } catch (_) {}
                 }
               }
+              // Every copy failed including session-init attempts (stale
+              // prekeys / desynced ratchet): drop the cached session state so a
+              // fresh prekey message can establish a clean session.
+              if (targets.some((c) => c && (c.t === 0 || c.t === 2))) {
+                await this.idbDelete(STORE_OLM, `session:${devKey}`);
+                await this.idbDelete(STORE_OLM, `sessionBase:${devKey}`);
+                await this.idbDelete(STORE_OLM, `session:${myUserId}`);
+                await this.idbDelete(STORE_OLM, `sessionBase:${myUserId}`);
+                delete this.sessions[devKey];
+                delete this.sessionBaselines[devKey];
+                delete this.sessions[myUserId];
+                delete this.sessionBaselines[myUserId];
+              }
             }
           } catch (_) {}
         }
@@ -972,6 +1009,22 @@ class CryptoEngine {
           } catch (e) {
             this.schedulePrekeyReplenish();
           }
+        }
+      }
+
+      // Every copy failed including session-init attempts: drop the cached
+      // session/baseline so the next fresh prekey message from the sender can
+      // establish a clean session instead of clashing with broken state.
+      if (candidates.some((c) => c && (c.t === 0 || c.t === 2))) {
+        await this.idbDelete(STORE_OLM, `session:${sessionKeyToUse}`);
+        await this.idbDelete(STORE_OLM, `sessionBase:${sessionKeyToUse}`);
+        delete this.sessions[sessionKeyToUse];
+        delete this.sessionBaselines[sessionKeyToUse];
+        if (otherIdStr) {
+          await this.idbDelete(STORE_OLM, `session:${otherIdStr}`);
+          await this.idbDelete(STORE_OLM, `sessionBase:${otherIdStr}`);
+          delete this.sessions[otherIdStr];
+          delete this.sessionBaselines[otherIdStr];
         }
       }
 

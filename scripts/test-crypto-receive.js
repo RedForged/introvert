@@ -86,6 +86,15 @@ class FakeIDB {
                 });
                 return r;
               },
+              delete: (key) => {
+                const r = { result: undefined, onsuccess: null, onerror: null };
+                queueMicrotask(() => {
+                  store.delete(key);
+                  if (r.onsuccess) r.onsuccess();
+                  if (tx.oncomplete) tx.oncomplete();
+                });
+                return r;
+              },
             }),
             oncomplete: null,
             onerror: null,
@@ -128,6 +137,7 @@ const bridge = {
     map: new Map(),
     get: async (key) => (bridge.storage.map.has(key) ? bridge.storage.map.get(key) : null),
     set: async (key, value) => { bridge.storage.map.set(key, value); },
+    delete: async (key) => { bridge.storage.map.delete(key); },
   },
 };
 

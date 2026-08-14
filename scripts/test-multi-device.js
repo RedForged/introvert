@@ -86,7 +86,7 @@ const bridge = {
     uploadHistoryBackup: async () => ({ ok: true })
   },
   config: { currentUser: { id: 10, username: 'introvert_user' }, serverUrl: 'http://localhost' },
-  storage: { map: new Map(), get: async (k) => bridge.storage.map.get(k) || null, set: async (k, v) => { bridge.storage.map.set(k, v); } }
+  storage: { map: new Map(), get: async (k) => bridge.storage.map.get(k) || null, set: async (k, v) => { bridge.storage.map.set(k, v); }, delete: async (k) => { bridge.storage.map.delete(k); } }
 };
 
 globalThis.__testBridge = bridge;
@@ -146,8 +146,8 @@ async function run() {
 
   bridge.mockPeerBundle = {
     devices: [
-      { device_id: 'bob_desktop', identity_key: bobDev1Keys.curve25519, one_time_key: { public_key: Object.values(bobDev1Otks.curve25519)[0] } },
-      { device_id: 'bob_phone', identity_key: bobDev2Keys.curve25519, one_time_key: { public_key: Object.values(bobDev2Otks.curve25519)[0] } }
+      { device_id: 'bob_desktop', identity_key: bobDev1Keys.curve25519, one_time_key: { id: 'otk-1', public_key: Object.values(bobDev1Otks.curve25519)[0] } },
+      { device_id: 'bob_phone', identity_key: bobDev2Keys.curve25519, one_time_key: { id: 'otk-1', public_key: Object.values(bobDev2Otks.curve25519)[0] } }
     ],
     sender_devices: []
   };
@@ -231,6 +231,29 @@ async function run() {
   const fbDecrypted = await cryptoEngine.decryptDm(fbMsg, false, '21', carlKeys.curve25519);
   assert.strictEqual(fbDecrypted, 'Fallback-key message from Extrovert Web!', 'Introvert must decrypt fallback-key (type-2) prekey messages');
   console.log('  ✅ [PASS] Introvert decrypts fallback-key (type-2) prekey message');
+
+  // 4. Session healing: when the peer republishes fresh one-time keys (every
+  // login re-publishes), the sender must detect the new key and establish a
+  // FRESH session (type-0) instead of reusing a possibly desynced ratchet.
+  const bobDev1OtksAfter = JSON.parse(bobDev1.one_time_keys());
+  const secondOtk = Object.values(bobDev1OtksAfter.curve25519)[0];
+  bridge.mockPeerBundle = {
+    devices: [
+      { device_id: 'bob_desktop', identity_key: bobDev1Keys.curve25519, one_time_key: { id: 'fresh-otk-2', public_key: secondOtk } },
+      { device_id: 'bob_phone', identity_key: bobDev2Keys.curve25519, one_time_key: { id: 'fresh-otk-2', public_key: secondOtk } }
+    ],
+    sender_devices: []
+  };
+  const rekeyPlain = 'Message after Bob republished keys!';
+  const rekeyPayload = await cryptoEngine.encryptDm('20', 'bob', rekeyPlain);
+  const rekeyEnv = JSON.parse(rekeyPayload.body);
+  const bobDesktopCopy = rekeyEnv.devices['bob_desktop'];
+  assert.strictEqual(bobDesktopCopy.t, 0, 'Sender must start a fresh prekey session after the peer republishes (got t=' + bobDesktopCopy.t + ')');
+  const bobFreshSess = new Olm.Session();
+  bobFreshSess.create_inbound(bobDev1, bobDesktopCopy.b);
+  const bobFreshDecrypted = bobFreshSess.decrypt(bobDesktopCopy.t, bobDesktopCopy.b);
+  assert.strictEqual(bobFreshDecrypted, rekeyPlain, 'Bob must decrypt the re-keyed message');
+  console.log('  ✅ [PASS] Sender re-keys with a fresh session after recipient republishes keys');
 
   console.log('\n========================================\nSummary: All Multi-Device tests passed!\n========================================');
 }
