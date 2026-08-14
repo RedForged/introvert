@@ -34,7 +34,11 @@ export const storage = {
         console.warn('Tauri storage_set failed', err);
       }
     }
-    localStorage.setItem(`introvert_${key}`, String(value));
+    try {
+      localStorage.setItem(`introvert_${key}`, String(value));
+    } catch (err) {
+      console.warn('localStorage setItem failed (quota exceeded?)', err);
+    }
   },
 
   async delete(key) {

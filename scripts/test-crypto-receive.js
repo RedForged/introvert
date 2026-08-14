@@ -317,4 +317,14 @@ test('unknown-sender envelope fails cleanly (no crash, placeholder text)', async
   }
 });
 
+test('unwrapEnvelope canonicalizes across key order and WS wrapping', async () => {
+  const devices = { dev_x: { t: 0, b: 'AAAA' } };
+  const a = cryptoEngine.unwrapEnvelope(JSON.stringify({ v: 2, sender_device_id: 'dev_abc', devices, t: 0, b: 'AAAA' }));
+  const b = cryptoEngine.unwrapEnvelope(JSON.stringify({ b: 'AAAA', devices, sender_device_id: 'dev_abc', t: 0, v: 2 }));
+  const wrapped = cryptoEngine.unwrapEnvelope(JSON.stringify({ body: JSON.stringify({ v: 2, sender_device_id: 'dev_abc', devices, t: 0, b: 'AAAA' }) }));
+  if (a !== b || b !== wrapped) {
+    throw new Error(`envelope normalization is not canonical: ${JSON.stringify({ a, b, wrapped })}`);
+  }
+});
+
 await finish();

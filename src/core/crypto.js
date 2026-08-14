@@ -12,6 +12,22 @@ const KEY_DEVICE = 'deviceKey';
 const PICKLE_KEY = 'extrovert-olm-pickle-v1';
 const PREKEY_THRESHOLD = 3;
 
+// Canonical JSON string with recursively sorted object keys. Two structurally
+// equal envelopes must stringify identically regardless of key order, which
+// the WebSocket live events and the history endpoint can reorder independently.
+// Without this, the plaintext cache and the in-memory memo key off by
+// formatting and force a doomed re-decrypt of an already-consumed Olm key.
+function canonicalJson(value) {
+  if (Array.isArray(value)) {
+    return '[' + value.map((v) => canonicalJson(v)).join(',') + ']';
+  }
+  if (value !== null && typeof value === 'object') {
+    const keys = Object.keys(value).sort();
+    return '{' + keys.map((k) => JSON.stringify(k) + ':' + canonicalJson(value[k])).join(',') + '}';
+  }
+  return JSON.stringify(value);
+}
+
 class CryptoEngine {
   constructor() {
     this.olmInitPromise = null;
@@ -218,7 +234,9 @@ class CryptoEngine {
   }
 
   async idbSet(storeName, key, val) {
-    await storage.set(`${storeName}:${key}`, val);
+    try {
+      await storage.set(`${storeName}:${key}`, val);
+    } catch (e) {}
     try {
       const db = await this.openDB();
       return new Promise((resolve, reject) => {
@@ -997,17 +1015,18 @@ class CryptoEngine {
   // The WebSocket live events occasionally wrap the envelope:
   // body = '{"body":"{...envelope...}"}'. Normalize every caller shape
   // (history fetch, live event, cache records) to one canonical string so
-  // cache comparisons never miss due to formatting differences.
+  // cache comparisons never miss due to formatting differences. Keys are
+  // sorted recursively so reordered envelopes still match.
   unwrapEnvelope(body) {
     if (typeof body !== 'string') return body;
     const t = body.trim();
     if (!t.startsWith('{')) return body;
     try {
       const parsed = JSON.parse(t);
-      if (parsed && typeof parsed === 'object' && typeof parsed.body === 'string' && parsed.body.trim().startsWith('{')) {
-        return JSON.stringify(JSON.parse(parsed.body));
-      }
-      return JSON.stringify(parsed);
+      const inner = (parsed && typeof parsed === 'object' && typeof parsed.body === 'string' && parsed.body.trim().startsWith('{'))
+        ? JSON.parse(parsed.body)
+        : parsed;
+      return canonicalJson(inner);
     } catch (e) {
       return body;
     }
