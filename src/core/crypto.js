@@ -468,6 +468,48 @@ class CryptoEngine {
     return run;
   }
 
+  // Wipe the Olm account, self-sessions and every cached session/baseline.
+  // Keeps the device key Kd (it also protects the secure message store) and
+  // the device id (the server row is upserted with the fresh identity on the
+  // next publish). Used to repair poisoned local state.
+  async resetCryptoState() {
+    const keys = ['account', 'selfInbound', 'selfOutbound'];
+    for (const k of keys) await this.idbDelete(STORE_OLM, k);
+    for (const k of Object.keys(this.sessions)) await this.idbDelete(STORE_OLM, `session:${k}`);
+    for (const k of Object.keys(this.sessionBaselines)) await this.idbDelete(STORE_OLM, `sessionBase:${k}`);
+    this.account = null;
+    this.myIdKeys = null;
+    this.sessions = {};
+    this.sessionBaselines = {};
+    this.selfInbound = null;
+    this.selfOutbound = null;
+    this.selfInboundBaseline = null;
+    this.ensureReadyPromise = null;
+  }
+
+  // Detect poisoned state: if the server's row for THIS device id carries a
+  // different identity than the local account (stale registration from an
+  // earlier broken era), reset the local state and re-register fresh. With
+  // sender-side re-keying this heals every other client automatically.
+  async verifyAndHealDeviceIdentity() {
+    try {
+      const myDevId = await this.getOrCreateDeviceId();
+      const myIdentity = this.myIdKeys && this.myIdKeys.curve25519;
+      if (!myIdentity) return;
+      const res = await api.getDevices();
+      const devices = Array.isArray(res) ? res : (res && res.devices) || [];
+      const mine = devices.find((d) => String(d.device_id) === String(myDevId));
+      if (mine && mine.identity_key && String(mine.identity_key) !== String(myIdentity)) {
+        console.warn('Device identity mismatch with server — resetting local crypto state');
+        await this.resetCryptoState();
+        await this.createAndPublishAccount();
+        await this.ensureSelfSessions();
+      }
+    } catch (e) {
+      console.warn('Device identity verification failed', e);
+    }
+  }
+
   async ensureReady() {
     // Memoized: live websocket events can arrive while bootstrap is still
     // initializing, and concurrent callers must share one init run.
@@ -494,6 +536,9 @@ class CryptoEngine {
           await this.loadSelfSessions();
           this.maybeReplenishPrekeys();
         }
+        // Detect and repair poisoned local state (identity mismatched with the
+        // server's device row) automatically on every login.
+        await this.verifyAndHealDeviceIdentity();
         await this.restoreHistoryFromBackup();
         return true;
       })
@@ -902,6 +947,15 @@ class CryptoEngine {
             } catch (_) {}
           }
         } catch (_) {}
+        // Self-session is broken/desynced: discard it so the next message
+        // re-initializes a fresh pair (future own messages decrypt again).
+        if (this.selfInbound || this.selfOutbound) {
+          await this.idbDelete(STORE_OLM, 'selfInbound');
+          await this.idbDelete(STORE_OLM, 'selfOutbound');
+          this.selfInbound = null;
+          this.selfOutbound = null;
+          this.selfInboundBaseline = null;
+        }
         return '[Unable to decrypt — encrypted for previous session]';
       });
     }

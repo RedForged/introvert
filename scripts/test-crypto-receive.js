@@ -120,6 +120,7 @@ const bridge = {
       return { ok: true, available: 5 };
     },
     getPrekeysCount: async () => ({ available: 100 }),
+    getDevices: async () => [],
     getSafetyKeys: async () => null,
     getPeerBundle: async () => null,
     getPrekeysBackup: async () => ({ backup: null }),

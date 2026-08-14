@@ -11,6 +11,24 @@ export function createSettingsModal({ onClose, onAddAccount, onLogout }) {
 
   let currentTab = 'account'; // 'account' | 'voice' | 'crypto' | 'appearance' | 'connection'
 
+  let appVersion = '…';
+  let devId = '…';
+  let resetArmed = false;
+
+  (async () => {
+    try {
+      if (window.__TAURI_INTERNALS__ || window.__TAURI__) {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const info = await invoke('get_platform_info');
+        if (info && info.version) appVersion = info.version;
+      }
+    } catch (e) {}
+    try {
+      devId = await cryptoEngine.getOrCreateDeviceId();
+    } catch (e) {}
+    render();
+  })();
+
   let audioInputs = [];
   let audioOutputs = [];
   let videoInputs = [];
@@ -193,6 +211,11 @@ export function createSettingsModal({ onClose, onAddAccount, onLogout }) {
               <h3 style="font-size:15px; font-weight:600; margin-bottom:12px;">End-to-End Encryption Keys</h3>
 
               <div class="form-group">
+                <label class="form-label">App &amp; Device</label>
+                <input type="text" class="form-input" value="Introvert ${appVersion} · ${devId}" readonly style="font-family:var(--font-mono); font-size:11px;" />
+              </div>
+
+              <div class="form-group" style="margin-top:10px;">
                 <label class="form-label">Curve25519 Identity Key (Double-Ratchet)</label>
                 <input type="text" class="form-input" value="${myIdKeys.curve25519}" readonly style="font-family:var(--font-mono); font-size:11px;" />
               </div>
@@ -208,10 +231,11 @@ export function createSettingsModal({ onClose, onAddAccount, onLogout }) {
               </div>
 
               <div style="margin-top:14px; padding:12px; background:var(--bg-glass); border:1px solid var(--border); border-radius:var(--radius-sm);">
-                <span style="font-size:12px; font-weight:600; color:var(--text-main); display:block; margin-bottom:4px;">Server Key Backup</span>
-                <p style="font-size:11.5px; color:var(--text-muted); line-height:1.4; margin:0;">
-                  If you used Extrovert in a browser before, your original encryption keys are stored on the server encrypted with your account password. Restoring them allows you to decrypt older message history.
+                <span style="font-size:12px; font-weight:600; color:var(--text-main); display:block; margin-bottom:4px;">Repair Encryption</span>
+                <p style="font-size:11.5px; color:var(--text-muted); line-height:1.4; margin:0 0 10px;">
+                  If messages from this device can't be decrypted anywhere, reset its keys: the app re-registers this device with fresh keys and every other client re-keys to it automatically.
                 </p>
+                <button class="btn-pill" id="reset-e2ee-btn" style="border-color:var(--rose); color:var(--rose);">Reset &amp; Re-register Keys</button>
               </div>
             `
                 : currentTab === 'appearance'
@@ -341,6 +365,29 @@ export function createSettingsModal({ onClose, onAddAccount, onLogout }) {
           render();
         },
       });
+    });
+
+    // E2EE Reset & re-register (two-click confirm — no native dialogs in webviews)
+    overlay.querySelector('#reset-e2ee-btn')?.addEventListener('click', async () => {
+      const btn = overlay.querySelector('#reset-e2ee-btn');
+      if (!resetArmed) {
+        resetArmed = true;
+        if (btn) btn.textContent = 'Click again to confirm reset';
+        setTimeout(() => {
+          resetArmed = false;
+          if (btn) btn.textContent = 'Reset & Re-register Keys';
+        }, 4000);
+        return;
+      }
+      resetArmed = false;
+      try {
+        await cryptoEngine.resetCryptoState();
+        await cryptoEngine.ensureReady();
+        showToast('success', 'Keys reset — device re-registered with fresh keys.');
+        window.location.reload();
+      } catch (err) {
+        showToast('danger', 'Reset failed', err.message);
+      }
     });
 
     // Appearance Theme switcher

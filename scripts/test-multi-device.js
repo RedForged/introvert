@@ -81,6 +81,7 @@ const bridge = {
   api: {
     publishPrekeys: async (bundle) => { bridge.publishedBundle = bundle; return { ok: true }; },
     getPrekeysCount: async () => ({ available: 10 }),
+    getDevices: async () => [],
     getPeerBundle: async () => bridge.mockPeerBundle,
     getHistoryBackup: async () => ({ backup_data: null }),
     uploadHistoryBackup: async () => ({ ok: true })
