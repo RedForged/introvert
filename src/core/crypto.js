@@ -807,7 +807,7 @@ class CryptoEngine {
                   if (pBase) return pBase;
                 } catch (_) {}
               }
-              if (target.t === 0) {
+              if (target.t === 0 || target.t === 2) {
                 const s = new window.Olm.Session();
                 try {
                   s.create_inbound(this.account, target.b);
@@ -913,7 +913,7 @@ class CryptoEngine {
         } catch (e) {}
       }
 
-      if (cipherToDecrypt.t === 0) {
+      if (cipherToDecrypt.t === 0 || cipherToDecrypt.t === 2) {
         try {
           const fresh = new window.Olm.Session();
           fresh.create_inbound(this.account, cipherToDecrypt.b);
@@ -1060,7 +1060,7 @@ class CryptoEngine {
         try {
           const sessionKey = await this.withPeerLock(senderIdStr, async () => {
             const env = JSON.parse(k.encrypted_key);
-            if (env.t === 0) {
+            if (env.t === 0 || env.t === 2) {
               const ns = new window.Olm.Session();
               ns.create_inbound(this.account, env.b);
               this.account.remove_one_time_keys(ns);

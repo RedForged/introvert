@@ -131,6 +131,7 @@ async function run() {
 
   await cryptoEngine.ensureReady();
   const myDeviceId = await cryptoEngine.getOrCreateDeviceId();
+  const myIdentityKey = cryptoEngine.myIdKeys && cryptoEngine.myIdKeys.curve25519;
   assert.ok(myDeviceId.startsWith('dev_'), 'DeviceId must have dev_ prefix');
   assert.ok(bridge.publishedBundle.device_id === myDeviceId, 'Published bundle must contain device_id');
 
@@ -194,6 +195,42 @@ async function run() {
   const introvertDecrypted = await cryptoEngine.decryptDm(bobReplyMsg, false, '20', bobDev1Keys.curve25519);
   assert.strictEqual(introvertDecrypted, replyPlain, 'Introvert must decrypt v2 multi-device message');
   console.log('  ✅ [PASS] Introvert decrypts v2 multi-device message from Extrovert Web');
+
+  // 3. Fallback-key session (recipient has NO one-time keys left — OTK pool
+  // drained by bundle claims). Senders then create the outbound session with
+  // the device's FALLBACK key, which produces Olm type-2 prekey messages.
+  // decryptDm must establish the inbound session from those too (previously
+  // only t === 0 was handled → '[Unable to decrypt — encrypted for previous
+  // session]' on every fallback-key message).
+  const carl = new Olm.Account(); carl.create(); carl.generate_fallback_key(); // deliberately NO OTKs
+  const carlKeys = JSON.parse(carl.identity_keys());
+  // The recipient's (Introvert's) fallback key — this is what a sender uses
+  // to build a fallback-key session when the recipient's OTK pool is drained.
+  const myFb = JSON.parse(cryptoEngine.account.fallback_key());
+  const myFbKey = myFb.curve25519[Object.keys(myFb.curve25519)[0]];
+
+  const carlSess = new Olm.Session();
+  carlSess.create_outbound(carl, myIdentityKey, myFbKey);
+  const fbEnc = carlSess.encrypt('Fallback-key message from Extrovert Web!');
+  // libolm emits type 0 for the first message of any outbound session, even
+  // when it was built from the recipient's fallback key. The real question is
+  // whether the recipient's create_inbound accepts a message created with its
+  // fallback key (OTK pool drained) — that's what the regression covers.
+  assert.ok(fbEnc.type === 0 || fbEnc.type === 2, `Fallback-key session produced unexpected type ${fbEnc.type}`);
+
+  const fbMsg = {
+    id: 1002,
+    from_id: '21',
+    body: JSON.stringify({
+      v: 2,
+      sender_device_id: 'carl_web',
+      devices: { [myDeviceId]: { t: fbEnc.type, b: fbEnc.body } }
+    }),
+    proto: 'olm'
+  };
+  const fbDecrypted = await cryptoEngine.decryptDm(fbMsg, false, '21', carlKeys.curve25519);
+  assert.strictEqual(fbDecrypted, 'Fallback-key message from Extrovert Web!', 'Introvert must decrypt fallback-key (type-2) prekey messages');
+  console.log('  ✅ [PASS] Introvert decrypts fallback-key (type-2) prekey message');
 
   console.log('\n========================================\nSummary: All Multi-Device tests passed!\n========================================');
 }
