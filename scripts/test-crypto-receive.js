@@ -301,8 +301,8 @@ test('sender-side session reset (new PreKey chain) heals the conversation', asyn
   // The baseline now belongs to the new chain, so old-chain history fails
   // cleanly with a placeholder (the UI serves already-decrypted history from
   // the local plaintext cache). Note: until a sender receives a reply, Olm
-  // marks every message type 0 — the consumed prekey means create_inbound
-  // can't re-derive the old chain, which is exactly the expected outcome.
+  // Clear memoized ciphertexts cache to test raw Olm engine fallback
+  cryptoEngine.decryptedCiphertexts.clear();
   const oldPlain = await cryptoEngine.decryptDm(m7, false, SENDER_ID, senderIdKeys.curve25519);
   if (oldPlain !== '[Unable to decrypt — encrypted for previous session]') {
     throw new Error(`expected clean failure, got ${JSON.stringify(oldPlain)}`);

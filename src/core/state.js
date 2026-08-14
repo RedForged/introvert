@@ -347,7 +347,20 @@ export async function syncActiveConversation(username) {
       (c) => c.username && c.username.toLowerCase() === username.toLowerCase()
     ) || { username };
 
-    const peerId = String(activePeer.id || (ordered[0] && (String(ordered[0].from_id) === currentUserId ? ordered[0].to_id : ordered[0].from_id)) || '');
+    const cacheKeys = [peerId, String(username || '')].filter(Boolean);
+    const cachedMap = new Map();
+    const cachedByCipher = new Map();
+    try {
+      for (const ck of cacheKeys) {
+        const cachedRecs = await cryptoEngine.secureLoadMessages(ck);
+        for (const r of cachedRecs || []) {
+          if (r && r.plaintext !== undefined) {
+            if (r.id !== undefined) cachedMap.set(String(r.id), r);
+            if (r.cipher) cachedByCipher.set(cryptoEngine.unwrapEnvelope(r.cipher), r);
+          }
+        }
+      }
+    } catch (_) {}
 
     const decrypted = [];
     for (const m of ordered) {
@@ -365,12 +378,18 @@ export async function syncActiveConversation(username) {
       }
 
       if (isOlm) {
+        const cipherNorm = cryptoEngine.unwrapEnvelope(m.body);
+        const cached = cachedMap.get(String(m.id)) || (cipherNorm ? cachedByCipher.get(cipherNorm) : null);
+        if (cached && cached.plaintext !== undefined && (cached.cipher === undefined || cryptoEngine.unwrapEnvelope(cached.cipher) === cipherNorm)) {
+          decrypted.push({ ...m, body: cached.plaintext, is_own: isOwn, decrypted: true });
+          continue;
+        }
         try {
           const plain = await cryptoEngine.decryptDm(m, isOwn, otherIdStr, curveKey);
           const failed = typeof plain === 'string' && plain.startsWith('[Unable to decrypt');
           if (!failed) {
             const cipherNorm = cryptoEngine.unwrapEnvelope(m.body);
-            cryptoEngine.securePersistMessage(otherIdStr, {
+            const record = {
               id: m.id,
               from_id: isOwn ? currentUserId : senderId,
               created_at: m.created_at,
@@ -379,7 +398,9 @@ export async function syncActiveConversation(username) {
               plaintext: plain,
               cipher: cipherNorm,
               own: isOwn,
-            }).catch(() => {});
+            };
+            if (otherIdStr) cryptoEngine.securePersistMessage(otherIdStr, record).catch(() => {});
+            if (username && username !== otherIdStr) cryptoEngine.securePersistMessage(username, record).catch(() => {});
           }
           decrypted.push({ ...m, body: plain, is_own: isOwn, decrypted: !failed });
         } catch (err) {
@@ -466,7 +487,7 @@ export async function refreshConversationsList() {
                 preview = await cryptoEngine.decryptDm(msgObj, isOwn, peerId, curveKey);
                 if (typeof preview === 'string' && !preview.startsWith('[Unable to decrypt')) {
                   const cipherNorm = cryptoEngine.unwrapEnvelope(msgObj.body);
-                  cryptoEngine.securePersistMessage(peerId, {
+                  const record = {
                     id: msgObj.id || Date.now(),
                     from_id: isOwn ? currentUserId : String(msgObj.from_id || peerId),
                     created_at: c.last_at || Date.now(),
@@ -475,7 +496,9 @@ export async function refreshConversationsList() {
                     plaintext: preview,
                     cipher: cipherNorm,
                     own: isOwn,
-                  }).catch(() => {});
+                  };
+                  if (peerId) cryptoEngine.securePersistMessage(peerId, record).catch(() => {});
+                  if (username && username !== peerId) cryptoEngine.securePersistMessage(username, record).catch(() => {});
                 }
               }
             } catch (e) {

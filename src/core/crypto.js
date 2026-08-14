@@ -47,6 +47,7 @@ class CryptoEngine {
     this.lastReplenishCheck = 0;
     this.deviceId = null;
     this.historySyncTimer = null;
+    this.decryptedCiphertexts = new Map();
   }
 
   async getOrCreateDeviceId() {
@@ -1017,6 +1018,21 @@ class CryptoEngine {
     if (typeof msg.body === 'string' && msg.body.startsWith('/uploads/stickers/')) {
       return msg.body;
     }
+    const normBody = this.unwrapEnvelope(msg.body);
+    if (this.decryptedCiphertexts && this.decryptedCiphertexts.has(normBody)) {
+      return this.decryptedCiphertexts.get(normBody);
+    }
+
+    const plain = await this._decryptDmInternal(msg, isOwn, otherIdStr, peerCurveKey);
+    if (typeof plain === 'string' && !plain.startsWith('[Unable to decrypt')) {
+      if (this.decryptedCiphertexts) {
+        this.decryptedCiphertexts.set(normBody, plain);
+      }
+    }
+    return plain;
+  }
+
+  async _decryptDmInternal(msg, isOwn, otherIdStr, peerCurveKey) {
     // Normalize the body shape (live WS events may wrap the envelope).
     msg = { ...msg, body: this.unwrapEnvelope(msg.body) };
 

@@ -74,13 +74,17 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
       // re-opening a chat never has to re-run crypto for old messages. The
       // cached record keeps the original ciphertext so an EDITED message
       // (same id, new body) is re-decrypted instead of showing stale text.
-      const cacheKey = String(activePeer.id || username);
+      const cacheKeys = [String(activePeer.id || ''), String(username || '')].filter(Boolean);
       const cachedMap = new Map();
+      const cachedByCipher = new Map();
       try {
-        const cachedRecs = await cryptoEngine.secureLoadMessages(cacheKey);
-        for (const r of cachedRecs || []) {
-          if (r && r.id !== undefined && r.plaintext !== undefined) {
-            cachedMap.set(String(r.id), r);
+        for (const ck of cacheKeys) {
+          const cachedRecs = await cryptoEngine.secureLoadMessages(ck);
+          for (const r of cachedRecs || []) {
+            if (r && r.plaintext !== undefined) {
+              if (r.id !== undefined) cachedMap.set(String(r.id), r);
+              if (r.cipher) cachedByCipher.set(cryptoEngine.unwrapEnvelope(r.cipher), r);
+            }
           }
         }
       } catch (e) {}
@@ -101,8 +105,9 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
         }
 
         if (isOlm) {
-          const cached = cachedMap.get(String(m.id));
-          if (cached && (cached.cipher === undefined || cryptoEngine.unwrapEnvelope(cached.cipher) === cryptoEngine.unwrapEnvelope(m.body))) {
+          const cipherNorm = cryptoEngine.unwrapEnvelope(m.body);
+          const cached = cachedMap.get(String(m.id)) || (cipherNorm ? cachedByCipher.get(cipherNorm) : null);
+          if (cached && cached.plaintext !== undefined && (cached.cipher === undefined || cryptoEngine.unwrapEnvelope(cached.cipher) === cipherNorm)) {
             decrypted.push({ ...m, body: cached.plaintext, is_own: isOwn, decrypted: true });
             continue;
           }
@@ -112,6 +117,7 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
             if (!failed) {
               const cipherNorm = cryptoEngine.unwrapEnvelope(m.body);
               cachedMap.set(String(m.id), { plaintext: plain, cipher: cipherNorm });
+              if (cipherNorm) cachedByCipher.set(cipherNorm, { plaintext: plain, cipher: cipherNorm });
               cryptoEngine.securePersistMessage(otherIdStr, {
                 id: m.id,
                 from_id: isOwn ? currentUserId : senderId,
