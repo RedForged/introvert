@@ -1737,7 +1737,7 @@ dependencies = [
 
 [[package]]
 name = "introvert"
-version = "1.0.14"
+version = "1.0.15"
 dependencies = [
  "serde",
  "serde_json",

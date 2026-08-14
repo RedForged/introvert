@@ -576,6 +576,15 @@ class CryptoEngine {
         // server's device row) automatically on every login.
         await this.verifyAndHealDeviceIdentity();
         await this.restoreHistoryFromBackup();
+
+        // One-time outbound clean-slate migration for v1.0.15 to clear stale pre-isolation sessions
+        const migKey = 'clean_outbound_v1_0_15';
+        const migrated = await this.idbGet(STORE_CRYPTO, migKey);
+        if (!migrated) {
+          await this.repairSessions('');
+          await this.idbSet(STORE_CRYPTO, migKey, 'done');
+        }
+
         return true;
       })
       .catch((err) => {
@@ -849,6 +858,12 @@ class CryptoEngine {
     const cached = this.outboundSessions[fullKey] || (await this.loadOutboundSession(fullKey));
     if (cached) {
       let mustRotate = false;
+      const isMarkedRekey = (await this.idbGet(STORE_OLM, `needsRekey:${otherIdStr}`)) || (await this.idbGet(STORE_OLM, `needsRekey:${fullKey}`));
+      if (isMarkedRekey) {
+        mustRotate = true;
+        await this.idbDelete(STORE_OLM, `needsRekey:${otherIdStr}`);
+        await this.idbDelete(STORE_OLM, `needsRekey:${fullKey}`);
+      }
       if (identityKey) {
         const storedIdent = await this.idbGet(STORE_OLM, `sessionIdent:${fullKey}`);
         if (storedIdent !== null && storedIdent !== undefined && String(storedIdent) !== String(identityKey)) {
@@ -1269,6 +1284,13 @@ class CryptoEngine {
           } catch (e) {
             this.schedulePrekeyReplenish();
           }
+        }
+      }
+
+      if (otherIdStr) {
+        await this.idbSet(STORE_OLM, `needsRekey:${otherIdStr}`, 'true');
+        if (sessionKeyToUse) {
+          await this.idbSet(STORE_OLM, `needsRekey:${sessionKeyToUse}`, 'true');
         }
       }
 
