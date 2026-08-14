@@ -727,23 +727,10 @@ class CryptoEngine {
   async getOrCreateDeviceOutboundSession(otherIdStr, deviceId, identityKey, fallbackKey, otk) {
     const fullKey = `${otherIdStr}:${deviceId}`;
 
-    // Session healing: track which one-time key built this session. When the
-    // peer publishes a DIFFERENT fresh key (it re-publishes on every login —
-    // the implicit "reset my sessions" signal), discard the cached session and
-    // start a new one with the new key. Without this, a desynced ratchet is
-    // reused forever and the pair can never decrypt each other again.
-    const freshOtkId = otk ? (typeof otk === 'object' ? String(otk.id || '') : String(otk)) : '';
-
     const cached = this.sessions[fullKey] || (await this.loadSession(fullKey));
     if (cached) {
       let mustRotate = false;
-      if (freshOtkId) {
-        const usedOtk = await this.idbGet(STORE_OLM, `sessionOtk:${fullKey}`);
-        if (usedOtk !== null && usedOtk !== undefined && String(usedOtk) !== String(freshOtkId)) {
-          mustRotate = true;
-        }
-      }
-      if (!mustRotate && identityKey) {
+      if (identityKey) {
         const storedIdent = await this.idbGet(STORE_OLM, `sessionIdent:${fullKey}`);
         if (storedIdent !== null && storedIdent !== undefined && String(storedIdent) !== String(identityKey)) {
           // The peer rotated its identity — the session can never work again.
@@ -768,7 +755,6 @@ class CryptoEngine {
 
     await this.saveSessionBaseline(fullKey, session);
     await this.saveSession(fullKey, session);
-    await this.idbSet(STORE_OLM, `sessionOtk:${fullKey}`, freshOtkId || 'fallback');
     await this.idbSet(STORE_OLM, `sessionIdent:${fullKey}`, identityKey);
     return session;
   }
@@ -937,24 +923,12 @@ class CryptoEngine {
                     s.create_inbound(this.account, target.b);
                     this.account.remove_one_time_keys(s);
                     const pNew = s.decrypt(target.t, target.b);
+                    await this.saveSessionBaseline(devKey, s);
                     await this.saveSession(devKey, s);
                     await this.saveAccount();
                     return pNew;
                   } catch (_) {}
                 }
-              }
-              // Every copy failed including session-init attempts (stale
-              // prekeys / desynced ratchet): drop the cached session state so a
-              // fresh prekey message can establish a clean session.
-              if (targets.some((c) => c && (c.t === 0 || c.t === 2))) {
-                await this.idbDelete(STORE_OLM, `session:${devKey}`);
-                await this.idbDelete(STORE_OLM, `sessionBase:${devKey}`);
-                await this.idbDelete(STORE_OLM, `session:${myUserId}`);
-                await this.idbDelete(STORE_OLM, `sessionBase:${myUserId}`);
-                delete this.sessions[devKey];
-                delete this.sessionBaselines[devKey];
-                delete this.sessions[myUserId];
-                delete this.sessionBaselines[myUserId];
               }
             }
           } catch (_) {}
@@ -1086,22 +1060,6 @@ class CryptoEngine {
           } catch (e) {
             this.schedulePrekeyReplenish();
           }
-        }
-      }
-
-      // Every copy failed including session-init attempts: drop the cached
-      // session/baseline so the next fresh prekey message from the sender can
-      // establish a clean session instead of clashing with broken state.
-      if (candidates.some((c) => c && (c.t === 0 || c.t === 2))) {
-        await this.idbDelete(STORE_OLM, `session:${sessionKeyToUse}`);
-        await this.idbDelete(STORE_OLM, `sessionBase:${sessionKeyToUse}`);
-        delete this.sessions[sessionKeyToUse];
-        delete this.sessionBaselines[sessionKeyToUse];
-        if (otherIdStr) {
-          await this.idbDelete(STORE_OLM, `session:${otherIdStr}`);
-          await this.idbDelete(STORE_OLM, `sessionBase:${otherIdStr}`);
-          delete this.sessions[otherIdStr];
-          delete this.sessionBaselines[otherIdStr];
         }
       }
 

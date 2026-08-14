@@ -1,6 +1,6 @@
 [package]
 name = "introvert"
-version = "1.0.8"
+version = "1.0.10"
 description = "Minimalist E2EE Chat, Rooms and WebRTC Calls client for Extrovert"
 authors = ["Introvert Team"]
 edition = "2021"

@@ -1,13 +1,13 @@
 {
   "name": "introvert",
   "private": true,
-  "version": "1.0.8",
+  "version": "1.0.10",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node scripts/test-introvert.js && node scripts/test-crypto-receive.js && node scripts/test-multi-device.js",
+    "test": "node scripts/test-introvert.js && node scripts/test-crypto-receive.js && node scripts/test-multi-device.js && node scripts/test-cross-device-e2e.js",
     "test:crypto-receive": "node scripts/test-crypto-receive.js",
     "test:multi-device": "node scripts/test-multi-device.js",
     "tauri": "tauri"

@@ -156,26 +156,33 @@ export async function initAppStores() {
   });
 
   signaling.on('new_dm', async (dmEvent) => {
-    const fromUser = dmEvent.from_username;
-    // Decrypt live DM. The websocket payload carries `from_id` (not
-    // `sender_id`) — keying sessions by the sender's real id is what makes
-    // live decrypts hit the same session the history path uses.
     try {
       await cryptoEngine.ensureReady();
-      const otherIdStr = String(dmEvent.message.from_id || dmEvent.message.sender_id || '');
+      const currentUserId = String(config.currentUser?.id || '');
+      const currentUsername = config.currentUser?.username || '';
+      const fromUser = dmEvent.from_username;
+      const msgFromId = String(dmEvent.message.from_id || dmEvent.message.sender_id || '');
+      const isOwn = msgFromId === currentUserId || fromUser === currentUsername;
+
+      const targetUser = isOwn ? (dmEvent.to_username || fromUser) : fromUser;
+      const otherIdStr = isOwn
+        ? String(dmEvent.message.to_id || msgFromId)
+        : msgFromId;
+
       const plain = await cryptoEngine.decryptDm(
         dmEvent.message,
-        false,
+        isOwn,
         otherIdStr,
         dmEvent.sender_curve
       );
 
       const newMsg = {
         id: dmEvent.message.id,
-        user_id: otherIdStr,
+        user_id: msgFromId,
+        from_id: msgFromId,
         body: plain,
         created_at: dmEvent.message.created_at || Date.now(),
-        is_own: false,
+        is_own: isOwn,
         proto: 'olm',
       };
 
@@ -185,30 +192,30 @@ export async function initAppStores() {
       if (typeof plain === 'string' && !plain.startsWith('[Unable to decrypt')) {
         cryptoEngine.securePersistMessage(otherIdStr, {
           id: dmEvent.message.id,
-          from_id: otherIdStr,
+          from_id: msgFromId,
           created_at: dmEvent.message.created_at || Date.now(),
           edited_at: null,
           proto: 'olm',
           plaintext: plain,
           cipher: cryptoEngine.unwrapEnvelope(dmEvent.message.body),
-          own: false,
+          own: isOwn,
         }).catch(() => {});
       }
 
-      const msgs = chatStore.get().messages[fromUser] || [];
+      const msgs = chatStore.get().messages[targetUser] || [];
       if (msgs.some((x) => String(x.id) === String(newMsg.id))) return;
       chatStore.set({
         messages: {
           ...chatStore.get().messages,
-          [fromUser]: [...msgs, newMsg],
+          [targetUser]: [...msgs, newMsg],
         },
       });
 
       // Update conversations list preview
       refreshConversationsList();
 
-      // Show toast if not on active thread
-      if (chatStore.get().activeConversation !== fromUser) {
+      // Show toast if not on active thread and not own message
+      if (!isOwn && chatStore.get().activeConversation !== fromUser) {
         showToast('message', `New message from ${dmEvent.from_display || fromUser}`, plain.slice(0, 80));
       }
     } catch (err) {
@@ -278,12 +285,50 @@ export async function refreshConversationsList() {
           if (isProtoOlm) {
             try {
               const msgObj = typeof c.last_message === 'object' ? c.last_message : {
+                id: c.last_id,
                 body: c.last_message,
                 sender_ciphertext: c.last_sender_ciphertext,
                 from_id: c.last_from,
               };
               const isOwn = String(c.last_from || msgObj.from_id || msgObj.user_id) === currentUserId;
-              preview = await cryptoEngine.decryptDm(msgObj, isOwn, peerId, curveKey);
+
+              // Check plaintext cache first to avoid consuming Olm ratchet state
+              let cachedPlain = null;
+              try {
+                const cachedRecs = await cryptoEngine.secureLoadMessages(peerId);
+                const rawNorm = cryptoEngine.unwrapEnvelope(msgObj.body);
+                for (const r of cachedRecs || []) {
+                  if (r && r.plaintext !== undefined) {
+                    if (msgObj.id && String(r.id) === String(msgObj.id)) {
+                      cachedPlain = r.plaintext;
+                      break;
+                    }
+                    if (r.cipher && cryptoEngine.unwrapEnvelope(r.cipher) === rawNorm) {
+                      cachedPlain = r.plaintext;
+                      break;
+                    }
+                  }
+                }
+              } catch (_) {}
+
+              if (cachedPlain !== null) {
+                preview = cachedPlain;
+              } else {
+                preview = await cryptoEngine.decryptDm(msgObj, isOwn, peerId, curveKey);
+                if (typeof preview === 'string' && !preview.startsWith('[Unable to decrypt')) {
+                  const cipherNorm = cryptoEngine.unwrapEnvelope(msgObj.body);
+                  cryptoEngine.securePersistMessage(peerId, {
+                    id: msgObj.id || Date.now(),
+                    from_id: isOwn ? currentUserId : String(msgObj.from_id || peerId),
+                    created_at: c.last_at || Date.now(),
+                    edited_at: null,
+                    proto: 'olm',
+                    plaintext: preview,
+                    cipher: cipherNorm,
+                    own: isOwn,
+                  }).catch(() => {});
+                }
+              }
             } catch (e) {
               preview = '🔒 [Encrypted Message]';
             }

@@ -233,28 +233,45 @@ async function run() {
   assert.strictEqual(fbDecrypted, 'Fallback-key message from Extrovert Web!', 'Introvert must decrypt fallback-key (type-2) prekey messages');
   console.log('  ✅ [PASS] Introvert decrypts fallback-key (type-2) prekey message');
 
-  // 4. Session healing: when the peer republishes fresh one-time keys (every
-  // login re-publishes), the sender must detect the new key and establish a
-  // FRESH session (type-0) instead of reusing a possibly desynced ratchet.
-  const bobDev1OtksAfter = JSON.parse(bobDev1.one_time_keys());
-  const secondOtk = Object.values(bobDev1OtksAfter.curve25519)[0];
+  // 4. Double Ratchet continuity: when sending follow-up messages to the same
+  // device identity, the established ratchet session MUST be reused (type-1)
+  // rather than broken/reset on every bundle fetch.
+  const secondPlain = 'Second message to Bob along existing ratchet!';
+  const secondPayload = await cryptoEngine.encryptDm('20', 'bob', secondPlain);
+  const secondEnv = JSON.parse(secondPayload.body);
+  const bobDesktop2 = secondEnv.devices['bob_desktop'];
+  assert.strictEqual(bobDesktop2.t, 1, 'Follow-up message must use ratchet (t=1)');
+  const bobDecrypted2 = bobDev1Sess.decrypt(bobDesktop2.t, bobDesktop2.b);
+  assert.strictEqual(bobDecrypted2, secondPlain, 'Bob must decrypt follow-up message using existing session');
+  console.log('  ✅ [PASS] Double-Ratchet session continues seamlessly (t=1) across messages');
+
+  // 5. Identity rotation: when a device rotates its Curve25519 identity key (reinstall),
+  // the sender detects the changed identity and establishes a fresh session (type-0).
+  const bobDev1New = new Olm.Account();
+  bobDev1New.create();
+  bobDev1New.generate_one_time_keys(1);
+  const bobDev1NewKeys = JSON.parse(bobDev1New.identity_keys());
+  const bobDev1NewOtks = JSON.parse(bobDev1New.one_time_keys());
+  const newOtk = Object.values(bobDev1NewOtks.curve25519)[0];
+
   bridge.mockPeerBundle = {
     devices: [
-      { device_id: 'bob_desktop', identity_key: bobDev1Keys.curve25519, one_time_key: { id: 'fresh-otk-2', public_key: secondOtk } },
-      { device_id: 'bob_phone', identity_key: bobDev2Keys.curve25519, one_time_key: { id: 'fresh-otk-2', public_key: secondOtk } }
+      { device_id: 'bob_desktop', identity_key: bobDev1NewKeys.curve25519, one_time_key: { id: 'new-dev-otk', public_key: newOtk } },
+      { device_id: 'bob_phone', identity_key: bobDev2Keys.curve25519, one_time_key: { id: 'phone-otk', public_key: newOtk } }
     ],
     sender_devices: []
   };
-  const rekeyPlain = 'Message after Bob republished keys!';
+
+  const rekeyPlain = 'Message after Bob reinstalled and rotated identity!';
   const rekeyPayload = await cryptoEngine.encryptDm('20', 'bob', rekeyPlain);
   const rekeyEnv = JSON.parse(rekeyPayload.body);
-  const bobDesktopCopy = rekeyEnv.devices['bob_desktop'];
-  assert.strictEqual(bobDesktopCopy.t, 0, 'Sender must start a fresh prekey session after the peer republishes (got t=' + bobDesktopCopy.t + ')');
-  const bobFreshSess = new Olm.Session();
-  bobFreshSess.create_inbound(bobDev1, bobDesktopCopy.b);
-  const bobFreshDecrypted = bobFreshSess.decrypt(bobDesktopCopy.t, bobDesktopCopy.b);
-  assert.strictEqual(bobFreshDecrypted, rekeyPlain, 'Bob must decrypt the re-keyed message');
-  console.log('  ✅ [PASS] Sender re-keys with a fresh session after recipient republishes keys');
+  const bobDesktopNewCopy = rekeyEnv.devices['bob_desktop'];
+  assert.strictEqual(bobDesktopNewCopy.t, 0, 'Sender must start a fresh prekey session after identity rotation (got t=' + bobDesktopNewCopy.t + ')');
+  const bobNewSess = new Olm.Session();
+  bobNewSess.create_inbound(bobDev1New, bobDesktopNewCopy.b);
+  const bobNewDecrypted = bobNewSess.decrypt(bobDesktopNewCopy.t, bobDesktopNewCopy.b);
+  assert.strictEqual(bobNewDecrypted, rekeyPlain, 'Bob new account must decrypt the re-keyed message');
+  console.log('  ✅ [PASS] Sender re-keys with a fresh session after recipient rotates identity');
 
   console.log('\n========================================\nSummary: All Multi-Device tests passed!\n========================================');
 }
