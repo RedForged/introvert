@@ -562,9 +562,35 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
 
   // Subscribe to reactive store
   chatStore.subscribe((state) => {
-    if (state.activeConversation && state.activeConversation.toLowerCase() !== (currentUsername || '').toLowerCase()) {
+    // Conversation closed (e.g. back button): fully reset the view state so
+    // that re-selecting the SAME chat on the next click re-enters it.
+    // Without this, currentUsername still matches the re-selected conversation,
+    // the guard below skips loadConversation, and the chat gets highlighted in
+    // the list ("selected") but never opens ("doesn't enter").
+    if (!state.activeConversation) {
+      if (currentUsername !== null) {
+        loadSeq++; // invalidate any in-flight history load for the closed chat
+        currentUsername = null;
+        activePeer = null;
+        messages = [];
+        isSecureMode = false;
+        renderedUsername = null;
+        container.classList.remove('mobile-active');
+        render();
+      }
+      return;
+    }
+
+    if (state.activeConversation.toLowerCase() !== (currentUsername || '').toLowerCase()) {
       loadConversation(state.activeConversation);
     } else if (currentUsername) {
+      // Same conversation re-selected: normally a no-op. If the view DOM was
+      // torn down while the selection persisted, force a re-entry so the chat
+      // actually opens instead of just staying highlighted.
+      if (!container.querySelector('#message-stream')) {
+        loadConversation(state.activeConversation);
+        return;
+      }
       const convKey = Object.keys(state.messages).find((k) => k.toLowerCase() === currentUsername.toLowerCase()) || currentUsername;
       const newMsgs = state.messages[convKey];
       if (newMsgs && newMsgs !== messages) {
