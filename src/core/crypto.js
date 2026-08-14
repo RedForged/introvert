@@ -406,6 +406,13 @@ class CryptoEngine {
 
   async publishPrekeys() {
     const devId = await this.getOrCreateDeviceId();
+    // Top up the one-time-key pool before publishing (unused keys accumulate
+    // safely; the server dedupes repeated uploads by (user, device, key id)).
+    try {
+      const current = JSON.parse(this.account.one_time_keys());
+      const unused = Object.keys(current.curve25519 || {}).length;
+      if (unused < 5) this.account.generate_one_time_keys(5);
+    } catch (_) {}
     const keys = JSON.parse(this.account.one_time_keys());
     const otks = Object.keys(keys.curve25519).map((id) => ({
       id,
@@ -475,6 +482,15 @@ class CryptoEngine {
           await this.createAndPublishAccount();
           await this.ensureSelfSessions();
         } else {
+          // Re-publish this device's identity + keys on EVERY login: it
+          // re-registers the device row (self-healing after identity-table or
+          // legacy-key changes server-side), refreshes the OTK pool and makes
+          // sure other clients' fan-out includes this device. Idempotent.
+          try {
+            await this.publishPrekeys();
+          } catch (e) {
+            console.warn('Device re-publish on login failed', e);
+          }
           await this.loadSelfSessions();
           this.maybeReplenishPrekeys();
         }
@@ -786,37 +802,49 @@ class CryptoEngine {
         if (msg.body) {
           try {
             const env = typeof msg.body === 'string' ? JSON.parse(msg.body) : msg.body;
-            if (env && env.v === 2 && env.devices && env.devices[myDevId]) {
-              const target = env.devices[myDevId];
+            if (env && env.v === 2 && env.devices) {
               const myUserId = String(config.currentUser?.id || '');
               const senderDevId = env.sender_device_id || 'default';
               const devKey = `${myUserId}:${senderDevId}`;
-              let live = await this.loadSession(devKey);
-              if (!live) live = await this.loadSession(myUserId);
-              if (live) {
-                try {
-                  const plain = live.decrypt(target.t, target.b);
-                  await this.saveSession(devKey, live);
-                  return plain;
-                } catch (_) {}
+              // Try this device's copy first, then every other copy. Device ids
+              // can change (reinstall) while the local identity stays the same,
+              // so the decryptable copy may be under another key — and a sender
+              // with a drained OTK pool encrypts with our fallback key, which
+              // only matches when create_inbound runs against our account.
+              const targets = [];
+              if (env.devices[myDevId]) targets.push(env.devices[myDevId]);
+              for (const k of Object.keys(env.devices)) {
+                if (k !== myDevId) targets.push(env.devices[k]);
               }
-              const base = await this.loadSessionBaseline(devKey);
-              if (base) {
-                try {
-                  const pBase = base.decrypt(target.t, target.b);
-                  if (pBase) return pBase;
-                } catch (_) {}
-              }
-              if (target.t === 0 || target.t === 2) {
-                const s = new window.Olm.Session();
-                try {
-                  s.create_inbound(this.account, target.b);
-                  this.account.remove_one_time_keys(s);
-                  const pNew = s.decrypt(target.t, target.b);
-                  await this.saveSession(devKey, s);
-                  await this.saveAccount();
-                  return pNew;
-                } catch (_) {}
+              for (const target of targets) {
+                if (!target || target.t === undefined || !target.b) continue;
+                let live = await this.loadSession(devKey);
+                if (!live) live = await this.loadSession(myUserId);
+                if (live) {
+                  try {
+                    const plain = live.decrypt(target.t, target.b);
+                    await this.saveSession(devKey, live);
+                    return plain;
+                  } catch (_) {}
+                }
+                const base = await this.loadSessionBaseline(devKey);
+                if (base) {
+                  try {
+                    const pBase = base.decrypt(target.t, target.b);
+                    if (pBase) return pBase;
+                  } catch (_) {}
+                }
+                if (target.t === 0 || target.t === 2) {
+                  const s = new window.Olm.Session();
+                  try {
+                    s.create_inbound(this.account, target.b);
+                    this.account.remove_one_time_keys(s);
+                    const pNew = s.decrypt(target.t, target.b);
+                    await this.saveSession(devKey, s);
+                    await this.saveAccount();
+                    return pNew;
+                  } catch (_) {}
+                }
               }
             }
           } catch (_) {}
@@ -857,84 +885,93 @@ class CryptoEngine {
     let cipherToDecrypt = env;
     let senderDeviceId = 'default';
 
+    // Candidates to try, in order: this device's copy, the legacy root copy,
+    // then every other device's copy (device ids can change over time while
+    // the decryptable key material is still ours). A sender whose OTK pool
+    // for us was drained encrypts with our fallback key — create_inbound
+    // resolves that only against our own account.
+    const candidates = [];
     if (env.v === 2 && env.devices) {
       senderDeviceId = env.sender_device_id || 'default';
-      if (env.devices[myDevId]) {
-        cipherToDecrypt = env.devices[myDevId];
-      } else if (env.t !== undefined && env.b) {
-        cipherToDecrypt = { t: env.t, b: env.b };
-      } else {
-        const devKeys = Object.keys(env.devices);
-        if (devKeys.length) cipherToDecrypt = env.devices[devKeys[0]];
+      if (env.devices[myDevId]) candidates.push(env.devices[myDevId]);
+      if (env.t !== undefined && env.b) candidates.push({ t: env.t, b: env.b });
+      for (const k of Object.keys(env.devices)) {
+        if (k !== myDevId) candidates.push(env.devices[k]);
       }
+    } else {
+      candidates.push(env);
     }
 
-    if (!cipherToDecrypt || cipherToDecrypt.t === undefined || !cipherToDecrypt.b) {
+    if (!candidates.length) {
       return typeof msg.body === 'string' ? msg.body : '';
     }
 
     const sessionKeyToUse = `${otherIdStr}:${senderDeviceId}`;
 
     return this.withPeerLock(sessionKeyToUse, async () => {
-      let live = await this.loadSession(sessionKeyToUse);
-      if (!live && otherIdStr) live = await this.loadSession(otherIdStr);
+      for (const candidate of candidates) {
+        cipherToDecrypt = candidate;
+        if (!cipherToDecrypt || cipherToDecrypt.t === undefined || !cipherToDecrypt.b) continue;
 
-      if (live) {
-        const livePickle = live.pickle(PICKLE_KEY);
-        try {
-          const plain = live.decrypt(cipherToDecrypt.t, cipherToDecrypt.b);
-          try {
-            await this.saveSession(sessionKeyToUse, live);
-            if (otherIdStr) await this.saveSession(otherIdStr, live);
-          } catch (e) {}
-          return plain;
-        } catch (e) {
-          try {
-            const restored = new window.Olm.Session();
-            restored.unpickle(PICKLE_KEY, livePickle);
-            this.sessions[sessionKeyToUse] = restored;
-            if (otherIdStr) this.sessions[otherIdStr] = restored;
-          } catch (e2) {}
-        }
-      }
+        let live = await this.loadSession(sessionKeyToUse);
+        if (!live && otherIdStr) live = await this.loadSession(otherIdStr);
 
-      let base = await this.loadSessionBaseline(sessionKeyToUse);
-      if (!base && otherIdStr) base = await this.loadSessionBaseline(otherIdStr);
-      if (base) {
-        try {
-          const plain = base.decrypt(cipherToDecrypt.t, cipherToDecrypt.b);
-          if (!live) {
+        if (live) {
+          const livePickle = live.pickle(PICKLE_KEY);
+          try {
+            const plain = live.decrypt(cipherToDecrypt.t, cipherToDecrypt.b);
             try {
-              await this.saveSession(sessionKeyToUse, base);
-              if (otherIdStr) await this.saveSession(otherIdStr, base);
+              await this.saveSession(sessionKeyToUse, live);
+              if (otherIdStr) await this.saveSession(otherIdStr, live);
             } catch (e) {}
+            return plain;
+          } catch (e) {
+            try {
+              const restored = new window.Olm.Session();
+              restored.unpickle(PICKLE_KEY, livePickle);
+              this.sessions[sessionKeyToUse] = restored;
+              if (otherIdStr) this.sessions[otherIdStr] = restored;
+            } catch (e2) {}
           }
-          return plain;
-        } catch (e) {}
-      }
+        }
 
-      if (cipherToDecrypt.t === 0 || cipherToDecrypt.t === 2) {
-        try {
-          const fresh = new window.Olm.Session();
-          fresh.create_inbound(this.account, cipherToDecrypt.b);
-          this.account.remove_one_time_keys(fresh);
-          this.schedulePrekeyReplenish();
+        let base = await this.loadSessionBaseline(sessionKeyToUse);
+        if (!base && otherIdStr) base = await this.loadSessionBaseline(otherIdStr);
+        if (base) {
+          try {
+            const plain = base.decrypt(cipherToDecrypt.t, cipherToDecrypt.b);
+            if (!live) {
+              try {
+                await this.saveSession(sessionKeyToUse, base);
+                if (otherIdStr) await this.saveSession(otherIdStr, base);
+              } catch (e) {}
+            }
+            return plain;
+          } catch (e) {}
+        }
 
-          await this.saveSessionBaseline(sessionKeyToUse, fresh);
-          if (otherIdStr) await this.saveSessionBaseline(otherIdStr, fresh);
+        if (cipherToDecrypt.t === 0 || cipherToDecrypt.t === 2) {
+          try {
+            const fresh = new window.Olm.Session();
+            fresh.create_inbound(this.account, cipherToDecrypt.b);
+            this.account.remove_one_time_keys(fresh);
+            this.schedulePrekeyReplenish();
 
-          const plain = fresh.decrypt(cipherToDecrypt.t, cipherToDecrypt.b);
-          await this.saveSession(sessionKeyToUse, fresh);
-          if (otherIdStr) await this.saveSession(otherIdStr, fresh);
-          await this.saveAccount();
-          if (peerCurveKey) {
-            await this.idbSet(STORE_OLM, `sessionIdent:${sessionKeyToUse}`, String(peerCurveKey));
-            if (otherIdStr) await this.idbSet(STORE_OLM, `sessionIdent:${otherIdStr}`, String(peerCurveKey));
+            await this.saveSessionBaseline(sessionKeyToUse, fresh);
+            if (otherIdStr) await this.saveSessionBaseline(otherIdStr, fresh);
+
+            const plain = fresh.decrypt(cipherToDecrypt.t, cipherToDecrypt.b);
+            await this.saveSession(sessionKeyToUse, fresh);
+            if (otherIdStr) await this.saveSession(otherIdStr, fresh);
+            await this.saveAccount();
+            if (peerCurveKey) {
+              await this.idbSet(STORE_OLM, `sessionIdent:${sessionKeyToUse}`, String(peerCurveKey));
+              if (otherIdStr) await this.idbSet(STORE_OLM, `sessionIdent:${otherIdStr}`, String(peerCurveKey));
+            }
+            return plain;
+          } catch (e) {
+            this.schedulePrekeyReplenish();
           }
-          return plain;
-        } catch (e) {
-          this.schedulePrekeyReplenish();
-          return '[Unable to decrypt — encrypted for previous session]';
         }
       }
 
