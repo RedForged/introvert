@@ -824,10 +824,15 @@ class CryptoEngine {
         }
       }
       if (mustRotate) {
-        await this.idbDelete(STORE_OLM, `sessionOut:${fullKey}`);
-        await this.idbDelete(STORE_OLM, `session:${fullKey}`);
-        await this.idbDelete(STORE_OLM, `sessionBase:${fullKey}`);
+        await Promise.all([
+          this.idbDelete(STORE_OLM, `sessionOut:${fullKey}`),
+          this.idbDelete(STORE_OLM, `session:${fullKey}`),
+          this.idbDelete(STORE_OLM, `sessionBase:${fullKey}`),
+          this.idbDelete(STORE_OLM, `sessionIn:${fullKey}`),
+          this.idbDelete(STORE_OLM, `sessionInBase:${fullKey}`),
+        ]);
         delete this.outboundSessions[fullKey];
+        delete this.inboundSessions[fullKey];
         delete this.sessions[fullKey];
         delete this.sessionBaselines[fullKey];
       } else {

@@ -290,8 +290,123 @@ export async function bootstrapAuthenticatedData() {
       refreshContactsList(),
       refreshUnreadCount(),
     ]);
+
+    startLivePolling();
   } catch (err) {
     console.error('Bootstrap data error', err);
+  }
+}
+
+let livePollTimer = null;
+let isSyncingActiveConv = false;
+
+export function startLivePolling() {
+  if (livePollTimer) return;
+  livePollTimer = setInterval(async () => {
+    if (!config.token) return;
+    refreshConversationsList().catch(() => {});
+    const activeConv = chatStore.get().activeConversation;
+    if (activeConv) {
+      syncActiveConversation(activeConv).catch(() => {});
+    }
+  }, 2500);
+}
+
+export function stopLivePolling() {
+  if (livePollTimer) {
+    clearInterval(livePollTimer);
+    livePollTimer = null;
+  }
+}
+
+export async function syncActiveConversation(username) {
+  if (!username || isSyncingActiveConv) return;
+  isSyncingActiveConv = true;
+  try {
+    const history = await api.getConversationHistory(username);
+    const rawMessages = history.messages || [];
+    const currentUserId = String(config.currentUser?.id || '');
+
+    const currentMap = chatStore.get().messages;
+    const existing = currentMap[username] || [];
+    const existingIds = new Set(existing.map((m) => String(m.id)));
+
+    const newRaw = rawMessages.filter((m) => !existingIds.has(String(m.id)));
+    if (!newRaw.length) return;
+
+    const ordered = [...newRaw].sort(
+      (a, b) => (a.created_at - b.created_at) || (Number(a.id) - Number(b.id))
+    );
+
+    const activePeer = (chatStore.get().conversations || []).find(
+      (c) => c.username && c.username.toLowerCase() === username.toLowerCase()
+    ) || { username };
+
+    const peerId = String(activePeer.id || (ordered[0] && (String(ordered[0].from_id) === currentUserId ? ordered[0].to_id : ordered[0].from_id)) || '');
+
+    const decrypted = [];
+    for (const m of ordered) {
+      const senderId = String(m.from_id || m.user_id || m.sender_id || '');
+      const isOwn = senderId === currentUserId || m.is_own === true;
+      const otherIdStr = peerId || String(isOwn ? m.to_id : m.from_id);
+      const curveKey = activePeer.curve25519_key || activePeer.sender_curve || m.sender_curve;
+
+      let isOlm = m.proto === 'olm';
+      if (!isOlm && typeof m.body === 'string') {
+        const t = m.body.trim();
+        if (t.startsWith('{') && (t.includes('"t":') || t.includes('"b":'))) {
+          isOlm = true;
+        }
+      }
+
+      if (isOlm) {
+        try {
+          const plain = await cryptoEngine.decryptDm(m, isOwn, otherIdStr, curveKey);
+          const failed = typeof plain === 'string' && plain.startsWith('[Unable to decrypt');
+          if (!failed) {
+            const cipherNorm = cryptoEngine.unwrapEnvelope(m.body);
+            cryptoEngine.securePersistMessage(otherIdStr, {
+              id: m.id,
+              from_id: isOwn ? currentUserId : senderId,
+              created_at: m.created_at,
+              edited_at: m.edited_at || null,
+              proto: 'olm',
+              plaintext: plain,
+              cipher: cipherNorm,
+              own: isOwn,
+            }).catch(() => {});
+          }
+          decrypted.push({ ...m, body: plain, is_own: isOwn, decrypted: !failed });
+        } catch (err) {
+          decrypted.push({ ...m, body: '[Unable to decrypt — encrypted for previous session]', is_own: isOwn, decrypted: false });
+        }
+      } else {
+        decrypted.push({ ...m, is_own: isOwn, decrypted: true });
+      }
+    }
+
+    if (decrypted.length) {
+      const updatedMessages = [...(chatStore.get().messages[username] || []), ...decrypted];
+      const seen = new Set();
+      const deduped = [];
+      for (const msg of updatedMessages) {
+        if (!seen.has(String(msg.id))) {
+          seen.add(String(msg.id));
+          deduped.push(msg);
+        }
+      }
+      chatStore.set({
+        messages: {
+          ...chatStore.get().messages,
+          [username]: deduped,
+        },
+      });
+      refreshConversationsList();
+    }
+  } catch (err) {
+    // Non-fatal background sync error
+  } finally {
+    isSyncingActiveConv = false;
   }
 }
 
