@@ -389,6 +389,13 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
         </div>
 
         <div class="stage-header-actions">
+          <button class="btn-pill" id="rekey-btn" title="Reset and re-establish fresh encryption keys with this peer">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path>
+            </svg>
+            <span>Re-Key</span>
+          </button>
+
           <button class="btn-pill" id="safety-keys-btn" title="Verify Safety Numbers">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
@@ -448,7 +455,7 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
   };
 
   // Persistent Event Delegation on Container
-  container.addEventListener('click', (e) => {
+  container.addEventListener('click', async (e) => {
     const backBtn = e.target.closest('#chat-back-btn');
     if (backBtn) {
       container.classList.remove('mobile-active');
@@ -459,6 +466,16 @@ export function createChatView({ onBack, onOpenProfile, onOpenSafetyModal }) {
     const peerProfileBtn = e.target.closest('#chat-peer-profile-btn');
     if (peerProfileBtn) {
       if (onOpenProfile && activePeer) onOpenProfile(activePeer);
+      return;
+    }
+
+    const rekeyBtn = e.target.closest('#rekey-btn');
+    if (rekeyBtn) {
+      const otherIdStr = String(activePeer?.id || '');
+      showToast('info', 'Re-initializing encryption sessions...');
+      await cryptoEngine.repairSessions(otherIdStr);
+      showToast('success', 'Encryption keys reset. Next message will establish a fresh PreKey session.');
+      if (currentUsername) loadConversation(currentUsername);
       return;
     }
 

@@ -136,17 +136,50 @@ class CryptoEngine {
       const json = await this.decryptWithKek(data.backup_data, this.kek);
       const allData = JSON.parse(json);
       if (!allData || typeof allData !== 'object') return;
-      const db = await this.openDB();
-      const tx = db.transaction(STORE_SECURE, 'readwrite');
-      const store = tx.objectStore(STORE_SECURE);
       for (const k of Object.keys(allData)) {
-        store.put(allData[k], k);
+        await this.idbSet(STORE_SECURE, k, allData[k]);
       }
-      await new Promise((resolve) => {
-        tx.oncomplete = resolve;
-        tx.onerror = resolve;
-      });
     } catch (e) {}
+  }
+
+  async repairSessions(otherIdStr) {
+    const myUserId = String(config.currentUser?.id || '');
+    const prefix1 = otherIdStr ? `${otherIdStr}:` : '';
+    const prefix2 = myUserId ? `${myUserId}:` : '';
+
+    const keysToPurge = new Set();
+    for (const k of Object.keys(this.outboundSessions)) {
+      if ((prefix1 && k.startsWith(prefix1)) || (prefix2 && k.startsWith(prefix2)) || k === otherIdStr) {
+        keysToPurge.add(k);
+      }
+    }
+    for (const k of Object.keys(this.inboundSessions)) {
+      if ((prefix1 && k.startsWith(prefix1)) || (prefix2 && k.startsWith(prefix2)) || k === otherIdStr) {
+        keysToPurge.add(k);
+      }
+    }
+    for (const k of Object.keys(this.sessions)) {
+      if ((prefix1 && k.startsWith(prefix1)) || (prefix2 && k.startsWith(prefix2)) || k === otherIdStr) {
+        keysToPurge.add(k);
+      }
+    }
+
+    for (const k of keysToPurge) {
+      delete this.outboundSessions[k];
+      delete this.inboundSessions[k];
+      delete this.sessions[k];
+      delete this.sessionBaselines[k];
+      delete this.inboundBaselines[k];
+      await Promise.all([
+        this.idbDelete(STORE_OLM, `sessionOut:${k}`),
+        this.idbDelete(STORE_OLM, `sessionIn:${k}`),
+        this.idbDelete(STORE_OLM, `sessionInBase:${k}`),
+        this.idbDelete(STORE_OLM, `session:${k}`),
+        this.idbDelete(STORE_OLM, `sessionBase:${k}`),
+        this.idbDelete(STORE_OLM, `sessionIdent:${k}`),
+        this.idbDelete(STORE_OLM, `sessionOtk:${k}`),
+      ]);
+    }
   }
 
   // --- IndexedDB & File Store Helpers ---
