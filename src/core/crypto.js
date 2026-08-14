@@ -18,8 +18,11 @@ class CryptoEngine {
     this.deviceKey = null;
     this.account = null;
     this.myIdKeys = null; // { curve25519, ed25519 }
-    this.sessions = {}; // otherUserIdStr -> Olm.Session
-    this.sessionBaselines = {}; // otherUserIdStr -> creation-state pickle string
+    this.sessions = {}; // otherUserIdStr -> Olm.Session (legacy compatibility)
+    this.sessionBaselines = {}; // otherUserIdStr -> creation-state pickle string (legacy)
+    this.outboundSessions = {}; // fullKey -> Olm.Session (isolated outbound for encrypting)
+    this.inboundSessions = {}; // fullKey -> Olm.Session (isolated inbound for decrypting)
+    this.inboundBaselines = {}; // fullKey -> creation-state pickle string (isolated inbound baseline)
     this.selfOutbound = null;
     this.selfInbound = null;
     this.selfInboundBaseline = null;
@@ -663,6 +666,89 @@ class CryptoEngine {
     }
   }
 
+  // --- Isolated Outbound & Inbound Session Storage ---
+
+  async loadOutboundSession(fullKey) {
+    if (this.outboundSessions[fullKey]) return this.outboundSessions[fullKey];
+    const enc = await this.idbGet(STORE_OLM, `sessionOut:${fullKey}`);
+    if (enc) {
+      try {
+        const pickle = await this.decryptWithKd(enc);
+        const s = new window.Olm.Session();
+        s.unpickle(PICKLE_KEY, pickle);
+        this.outboundSessions[fullKey] = s;
+        return s;
+      } catch (_) {}
+    }
+    // Backwards-compatibility fallback to general session
+    return this.loadSession(fullKey);
+  }
+
+  async saveOutboundSession(fullKey, session) {
+    this.outboundSessions[fullKey] = session;
+    const enc = await this.encryptWithKd(session.pickle(PICKLE_KEY));
+    await this.idbSet(STORE_OLM, `sessionOut:${fullKey}`, enc);
+    // Also save legacy key for backward compatibility
+    this.sessions[fullKey] = session;
+    await this.idbSet(STORE_OLM, `session:${fullKey}`, enc);
+  }
+
+  async loadInboundSession(fullKey) {
+    if (this.inboundSessions[fullKey]) return this.inboundSessions[fullKey];
+    const enc = await this.idbGet(STORE_OLM, `sessionIn:${fullKey}`);
+    if (enc) {
+      try {
+        const pickle = await this.decryptWithKd(enc);
+        const s = new window.Olm.Session();
+        s.unpickle(PICKLE_KEY, pickle);
+        this.inboundSessions[fullKey] = s;
+        return s;
+      } catch (_) {}
+    }
+    return this.loadSession(fullKey);
+  }
+
+  async saveInboundSession(fullKey, session) {
+    this.inboundSessions[fullKey] = session;
+    this.sessions[fullKey] = session;
+    const enc = await this.encryptWithKd(session.pickle(PICKLE_KEY));
+    await this.idbSet(STORE_OLM, `sessionIn:${fullKey}`, enc);
+    await this.idbSet(STORE_OLM, `session:${fullKey}`, enc);
+  }
+
+  async saveInboundSessionBaseline(fullKey, session) {
+    const pickle = session.pickle(PICKLE_KEY);
+    this.inboundBaselines[fullKey] = pickle;
+    const enc = await this.encryptWithKd(pickle);
+    await this.idbSet(STORE_OLM, `sessionInBase:${fullKey}`, enc);
+    // Also save legacy baseline
+    this.sessionBaselines[fullKey] = pickle;
+    await this.idbSet(STORE_OLM, `sessionBase:${fullKey}`, enc);
+  }
+
+  async loadInboundSessionBaseline(fullKey) {
+    let pickle = this.inboundBaselines[fullKey];
+    if (!pickle) {
+      const enc = await this.idbGet(STORE_OLM, `sessionInBase:${fullKey}`);
+      if (enc) {
+        try {
+          pickle = await this.decryptWithKd(enc);
+          this.inboundBaselines[fullKey] = pickle;
+        } catch (_) {}
+      }
+    }
+    if (!pickle) {
+      return this.loadSessionBaseline(fullKey);
+    }
+    try {
+      const s = new window.Olm.Session();
+      s.unpickle(PICKLE_KEY, pickle);
+      return s;
+    } catch (_) {
+      return null;
+    }
+  }
+
   async loadSelfSessions() {
     const loadOne = async (key) => {
       const enc = await this.idbGet(STORE_OLM, key);
@@ -727,7 +813,7 @@ class CryptoEngine {
   async getOrCreateDeviceOutboundSession(otherIdStr, deviceId, identityKey, fallbackKey, otk) {
     const fullKey = `${otherIdStr}:${deviceId}`;
 
-    const cached = this.sessions[fullKey] || (await this.loadSession(fullKey));
+    const cached = this.outboundSessions[fullKey] || (await this.loadOutboundSession(fullKey));
     if (cached) {
       let mustRotate = false;
       if (identityKey) {
@@ -738,8 +824,10 @@ class CryptoEngine {
         }
       }
       if (mustRotate) {
+        await this.idbDelete(STORE_OLM, `sessionOut:${fullKey}`);
         await this.idbDelete(STORE_OLM, `session:${fullKey}`);
         await this.idbDelete(STORE_OLM, `sessionBase:${fullKey}`);
+        delete this.outboundSessions[fullKey];
         delete this.sessions[fullKey];
         delete this.sessionBaselines[fullKey];
       } else {
@@ -754,7 +842,7 @@ class CryptoEngine {
     session.create_outbound(this.account, identityKey, theirOtk);
 
     await this.saveSessionBaseline(fullKey, session);
-    await this.saveSession(fullKey, session);
+    await this.saveOutboundSession(fullKey, session);
     await this.idbSet(STORE_OLM, `sessionIdent:${fullKey}`, identityKey);
     return session;
   }
@@ -793,7 +881,7 @@ class CryptoEngine {
           if (sess) {
             const enc = sess.encrypt(plaintext);
             deviceCiphertexts[dev.device_id] = { t: enc.type, b: enc.body };
-            await this.saveSession(`${otherIdStr}:${dev.device_id}`, sess);
+            await this.saveOutboundSession(`${otherIdStr}:${dev.device_id}`, sess);
           }
         } catch (e) {
           console.warn(`Failed to encrypt for recipient device ${dev.device_id}`, e);
@@ -811,7 +899,7 @@ class CryptoEngine {
           if (sess) {
             const enc = sess.encrypt(plaintext);
             deviceCiphertexts[dev.device_id] = { t: enc.type, b: enc.body };
-            await this.saveSession(`${myUserId}:${dev.device_id}`, sess);
+            await this.saveOutboundSession(`${myUserId}:${dev.device_id}`, sess);
           }
         } catch (e) {
           console.warn(`Failed to encrypt for sender device ${dev.device_id}`, e);
@@ -901,30 +989,72 @@ class CryptoEngine {
               }
               for (const target of targets) {
                 if (!target || target.t === undefined || !target.b) continue;
-                let live = await this.loadSession(devKey);
-                if (!live) live = await this.loadSession(myUserId);
-                if (live) {
+
+                // 1. Try Inbound Session from sender device
+                let inLive = await this.loadInboundSession(devKey);
+                if (!inLive && myUserId) inLive = await this.loadInboundSession(myUserId);
+                if (inLive) {
+                  const livePickle = inLive.pickle(PICKLE_KEY);
                   try {
-                    const plain = live.decrypt(target.t, target.b);
-                    await this.saveSession(devKey, live);
+                    const plain = inLive.decrypt(target.t, target.b);
+                    await this.saveInboundSession(devKey, inLive);
                     return plain;
-                  } catch (_) {}
+                  } catch (_) {
+                    try {
+                      const restored = new window.Olm.Session();
+                      restored.unpickle(PICKLE_KEY, livePickle);
+                      this.inboundSessions[devKey] = restored;
+                    } catch (_) {}
+                  }
                 }
-                const base = await this.loadSessionBaseline(devKey);
-                if (base) {
+
+                // 2. Try Inbound Session Baseline from sender device
+                const inBase = await this.loadInboundSessionBaseline(devKey);
+                if (inBase) {
                   try {
-                    const pBase = base.decrypt(target.t, target.b);
+                    const pBase = inBase.decrypt(target.t, target.b);
                     if (pBase) return pBase;
                   } catch (_) {}
                 }
+
+                // 3. Try Outbound Session (if sender device replied along our ratchet)
+                let outLive = await this.loadOutboundSession(devKey);
+                if (outLive) {
+                  const livePickle = outLive.pickle(PICKLE_KEY);
+                  try {
+                    const plain = outLive.decrypt(target.t, target.b);
+                    await this.saveOutboundSession(devKey, outLive);
+                    return plain;
+                  } catch (_) {
+                    try {
+                      const restored = new window.Olm.Session();
+                      restored.unpickle(PICKLE_KEY, livePickle);
+                      this.outboundSessions[devKey] = restored;
+                    } catch (_) {}
+                  }
+                }
+
+                // 4. Try legacy session
+                let legacyLive = await this.loadSession(devKey);
+                if (!legacyLive && myUserId) legacyLive = await this.loadSession(myUserId);
+                if (legacyLive) {
+                  try {
+                    const plain = legacyLive.decrypt(target.t, target.b);
+                    await this.saveSession(devKey, legacyLive);
+                    return plain;
+                  } catch (_) {}
+                }
+
+                // 5. Create fresh inbound session if PreKey (t=0 or t=2)
                 if (target.t === 0 || target.t === 2) {
                   const s = new window.Olm.Session();
                   try {
                     s.create_inbound(this.account, target.b);
                     this.account.remove_one_time_keys(s);
+                    // Save baseline BEFORE decrypt!
+                    await this.saveInboundSessionBaseline(devKey, s);
                     const pNew = s.decrypt(target.t, target.b);
-                    await this.saveSessionBaseline(devKey, s);
-                    await this.saveSession(devKey, s);
+                    await this.saveInboundSession(devKey, s);
                     await this.saveAccount();
                     return pNew;
                   } catch (_) {}
@@ -1001,9 +1131,63 @@ class CryptoEngine {
         cipherToDecrypt = candidate;
         if (!cipherToDecrypt || cipherToDecrypt.t === undefined || !cipherToDecrypt.b) continue;
 
+        // 1. Try Inbound Session from sender device
+        let inLive = await this.loadInboundSession(sessionKeyToUse);
+        if (!inLive && otherIdStr) inLive = await this.loadInboundSession(otherIdStr);
+        if (inLive) {
+          const livePickle = inLive.pickle(PICKLE_KEY);
+          try {
+            const plain = inLive.decrypt(cipherToDecrypt.t, cipherToDecrypt.b);
+            try {
+              await this.saveInboundSession(sessionKeyToUse, inLive);
+              if (otherIdStr) await this.saveInboundSession(otherIdStr, inLive);
+            } catch (e) {}
+            return plain;
+          } catch (e) {
+            try {
+              const restored = new window.Olm.Session();
+              restored.unpickle(PICKLE_KEY, livePickle);
+              this.inboundSessions[sessionKeyToUse] = restored;
+              if (otherIdStr) this.inboundSessions[otherIdStr] = restored;
+            } catch (e2) {}
+          }
+        }
+
+        // 2. Try Inbound Baseline Session
+        let inBase = await this.loadInboundSessionBaseline(sessionKeyToUse);
+        if (!inBase && otherIdStr) inBase = await this.loadInboundSessionBaseline(otherIdStr);
+        if (inBase) {
+          try {
+            const plain = inBase.decrypt(cipherToDecrypt.t, cipherToDecrypt.b);
+            return plain;
+          } catch (e) {}
+        }
+
+        // 3. Try Outbound Session (if peer is replying on our outbound ratchet)
+        let outLive = await this.loadOutboundSession(sessionKeyToUse);
+        if (!outLive && otherIdStr) outLive = await this.loadOutboundSession(otherIdStr);
+        if (outLive) {
+          const livePickle = outLive.pickle(PICKLE_KEY);
+          try {
+            const plain = outLive.decrypt(cipherToDecrypt.t, cipherToDecrypt.b);
+            try {
+              await this.saveOutboundSession(sessionKeyToUse, outLive);
+              if (otherIdStr) await this.saveOutboundSession(otherIdStr, outLive);
+            } catch (e) {}
+            return plain;
+          } catch (e) {
+            try {
+              const restored = new window.Olm.Session();
+              restored.unpickle(PICKLE_KEY, livePickle);
+              this.outboundSessions[sessionKeyToUse] = restored;
+              if (otherIdStr) this.outboundSessions[otherIdStr] = restored;
+            } catch (e2) {}
+          }
+        }
+
+        // 4. Try legacy session
         let live = await this.loadSession(sessionKeyToUse);
         if (!live && otherIdStr) live = await this.loadSession(otherIdStr);
-
         if (live) {
           const livePickle = live.pickle(PICKLE_KEY);
           try {
@@ -1023,21 +1207,7 @@ class CryptoEngine {
           }
         }
 
-        let base = await this.loadSessionBaseline(sessionKeyToUse);
-        if (!base && otherIdStr) base = await this.loadSessionBaseline(otherIdStr);
-        if (base) {
-          try {
-            const plain = base.decrypt(cipherToDecrypt.t, cipherToDecrypt.b);
-            if (!live) {
-              try {
-                await this.saveSession(sessionKeyToUse, base);
-                if (otherIdStr) await this.saveSession(otherIdStr, base);
-              } catch (e) {}
-            }
-            return plain;
-          } catch (e) {}
-        }
-
+        // 5. Create fresh Inbound Session
         if (cipherToDecrypt.t === 0 || cipherToDecrypt.t === 2) {
           try {
             const fresh = new window.Olm.Session();
@@ -1045,12 +1215,13 @@ class CryptoEngine {
             this.account.remove_one_time_keys(fresh);
             this.schedulePrekeyReplenish();
 
-            await this.saveSessionBaseline(sessionKeyToUse, fresh);
-            if (otherIdStr) await this.saveSessionBaseline(otherIdStr, fresh);
+            // Save baseline BEFORE decrypt!
+            await this.saveInboundSessionBaseline(sessionKeyToUse, fresh);
+            if (otherIdStr) await this.saveInboundSessionBaseline(otherIdStr, fresh);
 
             const plain = fresh.decrypt(cipherToDecrypt.t, cipherToDecrypt.b);
-            await this.saveSession(sessionKeyToUse, fresh);
-            if (otherIdStr) await this.saveSession(otherIdStr, fresh);
+            await this.saveInboundSession(sessionKeyToUse, fresh);
+            if (otherIdStr) await this.saveInboundSession(otherIdStr, fresh);
             await this.saveAccount();
             if (peerCurveKey) {
               await this.idbSet(STORE_OLM, `sessionIdent:${sessionKeyToUse}`, String(peerCurveKey));
