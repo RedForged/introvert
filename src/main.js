@@ -1,5 +1,7 @@
-import { initAppStores, authStore, chatStore, roomStore, callStore, notificationStore, showToast } from './core/state.js';
+import { initAppStores, authStore, chatStore, roomStore, callStore, notificationStore, bootstrapAuthenticatedData, showToast } from './core/state.js';
 import { config } from './core/config.js';
+import { api } from './core/api.js';
+import { cryptoEngine } from './core/crypto.js';
 import { signaling } from './core/signaling.js';
 import { createNavigation } from './ui/components/Navigation.js';
 import { createChatList } from './ui/components/ChatList.js';
@@ -20,10 +22,19 @@ async function bootstrap() {
   const app = document.getElementById('app');
   if (!app) return;
 
-  // Handle OAuth Callback landing in browser
+  // Handle OAuth Callback landing in the app. The code can arrive either in
+  // the URL (?code=..., in-app mobile flow: the native listener redirects the
+  // WebView back to tauri://localhost/?code=...) or captured by the native
+  // OAuth listener (system-browser flow on desktop).
   const params = new URLSearchParams(window.location.search);
-  const oauthCode = params.get('code');
-  if (oauthCode && (window.location.pathname.includes('/oauth/callback') || window.location.search.includes('code='))) {
+  let oauthCode = params.get('code');
+  if (!oauthCode && (window.__TAURI_INTERNALS__ || window.__TAURI__)) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      oauthCode = (await invoke('get_oauth_code')) || null;
+    } catch (e) {}
+  }
+  if (oauthCode && (window.location.pathname.includes('/oauth/callback') || window.location.search.includes('code=') || oauthCode.length >= 32)) {
     try {
       const channel = new BroadcastChannel('introvert_oauth');
       channel.postMessage({ type: 'oauth_code', code: oauthCode });
@@ -32,7 +43,24 @@ async function bootstrap() {
       localStorage.setItem('introvert_oauth_received_code', oauthCode);
     } catch (e) {}
 
-    app.innerHTML = `
+    // Try to complete the login automatically (in-app mobile flow).
+    let completed = false;
+    try {
+      const { user } = await api.completeOAuth(oauthCode);
+      await cryptoEngine.ensureReady();
+      authStore.set({ isE2eeReady: true, isAuthenticated: true, user });
+      signaling.connect();
+      await bootstrapAuthenticatedData();
+      completed = true;
+      showToast('success', `Authorized as @${user.username}!`);
+    } catch (e) {
+      console.warn('Automatic OAuth completion failed; showing copy fallback', e);
+    }
+
+    if (completed) {
+      // Fall through to the normal bootstrap — the app is now authenticated.
+    } else {
+      app.innerHTML = `
       <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100vh; width:100vw; background:var(--bg-canvas); color:var(--text-main); font-family:var(--font-sans); text-align:center; padding:24px;">
         <div class="nav-logo" style="width:54px; height:54px; font-size:24px; margin-bottom:16px; box-shadow:0 8px 24px var(--accent-glow);">I</div>
         <h2 style="font-size:22px; font-weight:700; margin-bottom:8px;">Authorization Successful</h2>
@@ -49,12 +77,13 @@ async function bootstrap() {
       </div>
     `;
 
-    document.getElementById('copy-oauth-code-btn')?.addEventListener('click', () => {
-      navigator.clipboard.writeText(oauthCode);
-      const btn = document.getElementById('copy-oauth-code-btn');
-      if (btn) btn.textContent = 'Copied to Clipboard!';
-    });
-    return;
+      document.getElementById('copy-oauth-code-btn')?.addEventListener('click', () => {
+        navigator.clipboard.writeText(oauthCode);
+        const btn = document.getElementById('copy-oauth-code-btn');
+        if (btn) btn.textContent = 'Copied to Clipboard!';
+      });
+      return;
+    }
   }
 
   app.innerHTML = '<div style="display:flex; height:100vh; width:100vw; align-items:center; justify-content:center; color:var(--text-faint);">Loading Introvert...</div>';

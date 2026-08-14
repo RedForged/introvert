@@ -89,9 +89,10 @@ fn start_oauth_listener(app_handle: tauri::AppHandle) {
                     let req_str = String::from_utf8_lossy(&buffer[..n]);
                     if let Some(line) = req_str.lines().next() {
                         if line.contains("GET /oauth/callback") || line.contains("code=") {
+                            let mut code = String::new();
                             if let Some(code_idx) = req_str.find("code=") {
                                 let after = &req_str[code_idx + 5..];
-                                let code: String = after
+                                code = after
                                     .chars()
                                     .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '-' || *c == '.')
                                     .collect();
@@ -105,7 +106,25 @@ fn start_oauth_listener(app_handle: tauri::AppHandle) {
                                 }
                             }
 
-                            let body = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Introvert - Authorized</title><style>body{background:#0c0e12;color:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center}.card{background:#151821;border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:32px;text-align:center;max-width:380px;box-shadow:0 10px 30px rgba(0,0,0,0.5)}h2{margin:0 0 8px;font-size:20px;color:#38bdf8}p{font-size:13px;color:#94a3b8;margin:0 0 16px;line-height:1.5}</style></head><body><div class='card'><h2>Authorization Successful</h2><p>You can close this window and return to Introvert. The app will log you in automatically.</p></div><script>window.setTimeout(function(){ window.close(); }, 1200);</script></body></html>";
+                            // On Android the flow runs inside the app's own
+                            // WebView, so after capturing the code we send the
+                            // WebView back to the app origin (with the code) and
+                            // the app completes the login on boot. On desktop the
+                            // flow runs in the system browser, where the emitted
+                            // event / polling picks the code up in the app.
+                            let app_return = if cfg!(target_os = "android") && !code.is_empty() {
+                                format!(
+                                    "<meta http-equiv='refresh' content='1; url=tauri://localhost/?code={}'>",
+                                    code
+                                )
+                            } else {
+                                String::new()
+                            };
+
+                            let body = format!(
+                                "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Introvert - Authorized</title>{}<style>body{{background:#0c0e12;color:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center}}.card{{background:#151821;border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:32px;text-align:center;max-width:380px;box-shadow:0 10px 30px rgba(0,0,0,0.5)}}h2{{margin:0 0 8px;font-size:20px;color:#38bdf8}}p{{font-size:13px;color:#94a3b8;margin:0 0 16px;line-height:1.5}}</style></head><body><div class='card'><h2>Authorization Successful</h2><p>You can close this window and return to Introvert. The app will log you in automatically.</p></div><script>window.setTimeout(function(){{ window.close(); }}, 1200);</script></body></html>",
+                                app_return
+                            );
                             let response = format!(
                                 "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                                 body.len(),

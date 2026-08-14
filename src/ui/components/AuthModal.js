@@ -102,6 +102,17 @@ export function createAuthModal({ onSuccess }) {
       isLoading = false;
       render();
 
+      const isAndroid = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent);
+      if (isAndroid && (window.__TAURI_INTERNALS__ || window.__TAURI__)) {
+        // Android: run the flow inside the app's WebView. The consent page is
+        // rendered in-process, the native loopback listener captures the code,
+        // and the success page bounces the WebView back to tauri://localhost/
+        // where the app auto-completes the login — no system browser, no
+        // copy-paste, and no dependency on the browser allowing localhost.
+        window.location.href = authUrl;
+        return;
+      }
+
       startTauriPolling();
       await openExternalUrl(authUrl);
     } catch (err) {
