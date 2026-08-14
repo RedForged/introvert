@@ -708,54 +708,59 @@ class CryptoEngine {
     }
   }
 
-  // --- Isolated Outbound & Inbound Session Storage ---
+  // --- Unified Bidirectional Device Session Storage ---
+
+  async loadDeviceSession(fullKey) {
+    if (this.sessions[fullKey]) return this.sessions[fullKey];
+    if (this.outboundSessions[fullKey]) return this.outboundSessions[fullKey];
+    if (this.inboundSessions[fullKey]) return this.inboundSessions[fullKey];
+    for (const prefix of ['session:', 'sessionOut:', 'sessionIn:']) {
+      const enc = await this.idbGet(STORE_OLM, `${prefix}${fullKey}`);
+      if (enc) {
+        try {
+          const pickle = await this.decryptWithKd(enc);
+          const s = new window.Olm.Session();
+          s.unpickle(PICKLE_KEY, pickle);
+          this.sessions[fullKey] = s;
+          this.outboundSessions[fullKey] = s;
+          this.inboundSessions[fullKey] = s;
+          return s;
+        } catch (_) {}
+      }
+    }
+    return null;
+  }
 
   async loadOutboundSession(fullKey) {
-    if (this.outboundSessions[fullKey]) return this.outboundSessions[fullKey];
-    const enc = await this.idbGet(STORE_OLM, `sessionOut:${fullKey}`);
-    if (enc) {
-      try {
-        const pickle = await this.decryptWithKd(enc);
-        const s = new window.Olm.Session();
-        s.unpickle(PICKLE_KEY, pickle);
-        this.outboundSessions[fullKey] = s;
-        return s;
-      } catch (_) {}
-    }
-    // Backwards-compatibility fallback to general session
-    return this.loadSession(fullKey);
+    return this.loadDeviceSession(fullKey);
   }
 
   async saveOutboundSession(fullKey, session) {
     this.outboundSessions[fullKey] = session;
-    const enc = await this.encryptWithKd(session.pickle(PICKLE_KEY));
-    await this.idbSet(STORE_OLM, `sessionOut:${fullKey}`, enc);
-    // Also save legacy key for backward compatibility
+    this.inboundSessions[fullKey] = session;
     this.sessions[fullKey] = session;
-    await this.idbSet(STORE_OLM, `session:${fullKey}`, enc);
+    const enc = await this.encryptWithKd(session.pickle(PICKLE_KEY));
+    await Promise.all([
+      this.idbSet(STORE_OLM, `sessionOut:${fullKey}`, enc),
+      this.idbSet(STORE_OLM, `sessionIn:${fullKey}`, enc),
+      this.idbSet(STORE_OLM, `session:${fullKey}`, enc),
+    ]);
   }
 
   async loadInboundSession(fullKey) {
-    if (this.inboundSessions[fullKey]) return this.inboundSessions[fullKey];
-    const enc = await this.idbGet(STORE_OLM, `sessionIn:${fullKey}`);
-    if (enc) {
-      try {
-        const pickle = await this.decryptWithKd(enc);
-        const s = new window.Olm.Session();
-        s.unpickle(PICKLE_KEY, pickle);
-        this.inboundSessions[fullKey] = s;
-        return s;
-      } catch (_) {}
-    }
-    return this.loadSession(fullKey);
+    return this.loadDeviceSession(fullKey);
   }
 
   async saveInboundSession(fullKey, session) {
     this.inboundSessions[fullKey] = session;
+    this.outboundSessions[fullKey] = session;
     this.sessions[fullKey] = session;
     const enc = await this.encryptWithKd(session.pickle(PICKLE_KEY));
-    await this.idbSet(STORE_OLM, `sessionIn:${fullKey}`, enc);
-    await this.idbSet(STORE_OLM, `session:${fullKey}`, enc);
+    await Promise.all([
+      this.idbSet(STORE_OLM, `sessionIn:${fullKey}`, enc),
+      this.idbSet(STORE_OLM, `sessionOut:${fullKey}`, enc),
+      this.idbSet(STORE_OLM, `session:${fullKey}`, enc),
+    ]);
   }
 
   async saveInboundSessionBaseline(fullKey, session) {
