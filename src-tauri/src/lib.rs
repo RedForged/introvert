@@ -103,18 +103,37 @@ fn start_oauth_listener(app_handle: tauri::AppHandle) {
                                         *lock = Some(code.clone());
                                     }
                                     let _ = app_handle.emit("oauth_code", &code);
+
+                                    // On Android the flow runs inside the app's
+                                    // own WebView, so after capturing the code we
+                                    // send the WebView back to the app origin
+                                    // (http://tauri.localhost — the Android
+                                    // workaround URL; `tauri://localhost` is not
+                                    // loadable from a served page) with the code
+                                    // in the query string, and the app completes
+                                    // the login on boot. Navigating natively is
+                                    // more reliable than relying on the served
+                                    // page's meta-refresh.
+                                    #[cfg(target_os = "android")]
+                                    {
+                                        let app_url = format!("http://tauri.localhost/?code={}", code);
+                                        if let Ok(url) = tauri::Url::parse(&app_url) {
+                                            if let Some(webview) =
+                                                app_handle.get_webview_window("main")
+                                            {
+                                                let _ = webview.navigate(url);
+                                            }
+                                        }
+                                    }
                                 }
                             }
 
-                            // On Android the flow runs inside the app's own
-                            // WebView, so after capturing the code we send the
-                            // WebView back to the app origin (with the code) and
-                            // the app completes the login on boot. On desktop the
-                            // flow runs in the system browser, where the emitted
-                            // event / polling picks the code up in the app.
+                            // Fallback for the system-browser path / any browser
+                            // that can still navigate: on Android the meta-refresh
+                            // points back at the app origin too.
                             let app_return = if cfg!(target_os = "android") && !code.is_empty() {
                                 format!(
-                                    "<meta http-equiv='refresh' content='1; url=tauri://localhost/?code={}'>",
+                                    "<meta http-equiv='refresh' content='1; url=http://tauri.localhost/?code={}'>",
                                     code
                                 )
                             } else {
