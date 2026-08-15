@@ -320,6 +320,7 @@ export function startLivePolling() {
   livePollTimer = setInterval(async () => {
     if (!config.token) return;
     refreshConversationsList().catch(() => {});
+    refreshRoomsList().catch(() => {});
     const activeConv = chatStore.get().activeConversation;
     if (activeConv) {
       syncActiveConversation(activeConv).catch(() => {});

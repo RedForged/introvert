@@ -57,20 +57,11 @@ export function createNavigation({ onTabChange, onOpenProfile, onOpenSettings, o
         </svg>
       </div>
 
-      <button class="nav-btn ${currentTab === 'chats' ? 'active' : ''}" data-tab="chats" title="Direct Chats">
+      <button class="nav-btn ${currentTab === 'chats' ? 'active' : ''}" data-tab="chats" title="Chats">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
           <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
         </svg>
         ${totalUnreadDms > 0 ? `<span class="nav-badge">${totalUnreadDms > 99 ? '99+' : totalUnreadDms}</span>` : ''}
-      </button>
-
-      <button class="nav-btn ${currentTab === 'rooms' ? 'active' : ''}" data-tab="rooms" title="Rooms & Voice">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="3" y="3" width="7" height="7"></rect>
-          <rect x="14" y="3" width="7" height="7"></rect>
-          <rect x="14" y="14" width="7" height="7"></rect>
-          <rect x="3" y="14" width="7" height="7"></rect>
-        </svg>
       </button>
 
       <button class="nav-btn ${currentTab === 'contacts' ? 'active' : ''}" data-tab="contacts" title="Contacts">

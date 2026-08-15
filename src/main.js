@@ -6,7 +6,6 @@ import { signaling } from './core/signaling.js';
 import { createNavigation } from './ui/components/Navigation.js';
 import { createChatList } from './ui/components/ChatList.js';
 import { createChatView } from './ui/components/ChatView.js';
-import { createRoomList } from './ui/components/RoomList.js';
 import { createRoomView } from './ui/components/RoomView.js';
 import { createContactsList } from './ui/components/ContactsList.js';
 import { createCallOverlay } from './ui/components/CallOverlay.js';
@@ -90,7 +89,7 @@ async function bootstrap() {
 
   await initAppStores();
 
-  let activeTab = 'chats'; // 'chats' | 'rooms' | 'contacts' | 'call'
+  let activeTab = 'chats'; // 'chats' | 'contacts' | 'call'
   let authModalInstance = null;
 
   // Opens a peer's profile, wiring its Chat Settings (Re-Key) back into the open chat view
@@ -99,8 +98,9 @@ async function bootstrap() {
       user,
       onStartChat: (username) => {
         activeTab = 'chats';
-        updateLayout();
+        roomStore.set({ activeRoom: null, activeChannel: null });
         chatStore.set({ activeConversation: username });
+        updateLayout();
       },
       onRekey: (username) => {
         const active = chatStore.get().activeConversation;
@@ -118,6 +118,7 @@ async function bootstrap() {
   const chatView = createChatView({
     onBack: () => {
       chatStore.set({ activeConversation: null });
+      updateLayout();
     },
     onOpenProfile: openPeerProfile,
     onOpenSafetyModal: (username) => {
@@ -128,6 +129,7 @@ async function bootstrap() {
   const roomView = createRoomView({
     onBack: () => {
       roomStore.set({ activeRoom: null, activeChannel: null });
+      updateLayout();
     },
     onOpenProfile: openPeerProfile,
     onCreateChannel: (roomId) => {
@@ -142,21 +144,24 @@ async function bootstrap() {
 
   const chatList = createChatList({
     onSelectConversation: (username) => {
+      roomStore.set({ activeRoom: null, activeChannel: null });
       chatStore.set({ activeConversation: username });
+      updateLayout();
+    },
+    onSelectRoom: (roomId) => {
+      chatStore.set({ activeConversation: null });
+      roomStore.set({ activeRoom: { id: roomId } });
+      roomView.loadRoom(roomId);
+      updateLayout();
     },
     onStartNewDm: () => {
       createNewChatModal({
         onSelectUser: (username) => {
+          roomStore.set({ activeRoom: null, activeChannel: null });
           chatStore.set({ activeConversation: username });
+          updateLayout();
         },
       });
-    },
-  });
-
-  const roomList = createRoomList({
-    onSelectRoom: (roomId) => {
-      roomStore.set({ activeRoom: { id: roomId } });
-      roomView.loadRoom(roomId);
     },
     onCreateRoom: () => {
       createCreateRoomModal({
@@ -168,8 +173,9 @@ async function bootstrap() {
   const contactsList = createContactsList({
     onStartChat: (username) => {
       activeTab = 'chats';
-      updateLayout();
+      roomStore.set({ activeRoom: null, activeChannel: null });
       chatStore.set({ activeConversation: username });
+      updateLayout();
     },
     onOpenProfile: openPeerProfile,
   });
@@ -235,10 +241,12 @@ async function bootstrap() {
 
     if (activeTab === 'chats') {
       sidebarWrapper.appendChild(chatList);
-      stageWrapper.appendChild(chatView.element);
-    } else if (activeTab === 'rooms') {
-      sidebarWrapper.appendChild(roomList);
-      stageWrapper.appendChild(roomView.element);
+      const { activeRoom } = roomStore.get();
+      if (activeRoom) {
+        stageWrapper.appendChild(roomView.element);
+      } else {
+        stageWrapper.appendChild(chatView.element);
+      }
     } else if (activeTab === 'contacts') {
       sidebarWrapper.appendChild(contactsList);
       stageWrapper.appendChild(chatView.element);
@@ -256,6 +264,19 @@ async function bootstrap() {
   app.appendChild(appContainer);
 
   updateLayout();
+
+  // Ensure stage matches active conversation or room selection
+  chatStore.subscribe((state) => {
+    if (activeTab === 'chats' && state.activeConversation && !stageWrapper.contains(chatView.element)) {
+      updateLayout();
+    }
+  });
+
+  roomStore.subscribe((state) => {
+    if (activeTab === 'chats' && state.activeRoom && !stageWrapper.contains(roomView.element)) {
+      updateLayout();
+    }
+  });
 
   // Toast listener
   notificationStore.subscribe((state) => {
@@ -294,7 +315,10 @@ async function bootstrap() {
       e.preventDefault();
       createNewChatModal({
         onSelectUser: (username) => {
+          activeTab = 'chats';
+          roomStore.set({ activeRoom: null, activeChannel: null });
           chatStore.set({ activeConversation: username });
+          updateLayout();
         },
       });
     }
@@ -302,7 +326,10 @@ async function bootstrap() {
       e.preventDefault();
       createNewChatModal({
         onSelectUser: (username) => {
+          activeTab = 'chats';
+          roomStore.set({ activeRoom: null, activeChannel: null });
           chatStore.set({ activeConversation: username });
+          updateLayout();
         },
       });
     }

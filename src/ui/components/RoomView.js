@@ -485,7 +485,21 @@ export function createRoomView({ onBack, onOpenProfile, onCreateChannel }) {
     return div.innerHTML;
   }
 
-  roomStore.subscribe(render);
+  roomStore.subscribe((state) => {
+    if (!state.activeRoom) {
+      if (currentRoomId !== null) {
+        currentRoomId = null;
+        activeRoom = null;
+        activeChannel = null;
+        messages = [];
+        renderedKey = null;
+        container.classList.remove('mobile-active');
+        render();
+      }
+      return;
+    }
+    render();
+  });
   render();
   return {
     element: container,
